@@ -1,23 +1,17 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { TelegramService } from "../telegram/telegram.service";
-import { OpenAIService } from "../openai/openai.service";
 import { NewMessageEvent } from "telegram/events";
-import * as fs from "fs";
-import * as path from "path";
 
 interface ChannelConfig {
   sourceId: number;
-  targetTopicId: number;
-  promptKey: string;
-  prompt?: string;
+  targetChannelId: number;
+  targetTopicId?: number; // Optional: for posting to topics in a group
 }
 
 @Injectable()
 export class TranslatorService implements OnModuleInit {
   private readonly logger = new Logger(TranslatorService.name);
-  private targetGroupId: number;
   private channels: ChannelConfig[] = [];
-  private prompts: Record<string, string> = {};
   private groupedMessages: Map<
     string,
     { messages: any[]; timeout: NodeJS.Timeout; channelConfig: ChannelConfig }
@@ -31,31 +25,17 @@ export class TranslatorService implements OnModuleInit {
   private useDirectIds: boolean = false;
   private useLegacyMode: boolean = false;
 
-  constructor(
-    private readonly telegramService: TelegramService,
-    private readonly openaiService: OpenAIService
-  ) {
-    this.loadPrompts();
+  constructor(private readonly telegramService: TelegramService) {
     this.parseChannelConfiguration();
   }
 
-  private loadPrompts() {
-    try {
-      const promptsPath = path.join(process.cwd(), "prompts.json");
-      if (fs.existsSync(promptsPath)) {
-        const promptsData = fs.readFileSync(promptsPath, "utf-8");
-        this.prompts = JSON.parse(promptsData);
-        this.logger.log(
-          `Loaded ${Object.keys(this.prompts).length} prompts from prompts.json`
-        );
-      } else {
-        this.logger.warn("prompts.json not found, using default prompts only");
-        this.prompts = { default: "" }; // Will use hardcoded default
-      }
-    } catch (error) {
-      this.logger.error("Failed to load prompts.json", error.stack);
-      this.prompts = { default: "" };
-    }
+  /**
+   * Simple text replacement function
+   * Replaces @pass1fybot with @cheapmirror
+   */
+  private replaceText(text: string): string {
+    if (!text) return text;
+    return text.replace(/@pass1fybot/gi, "@cheapmirror");
   }
 
   private parseChannelConfiguration() {
@@ -64,44 +44,39 @@ export class TranslatorService implements OnModuleInit {
     if (channelsConfig) {
       // Multi-channel mode
       this.logger.log("Using multi-channel configuration mode");
-      const targetGroupId = process.env.TARGET_GROUP_ID;
 
-      if (!targetGroupId) {
-        throw new Error(
-          "TARGET_GROUP_ID is required when using CHANNELS_CONFIG"
-        );
-      }
-
-      this.targetGroupId = parseInt(targetGroupId);
-
-      // Parse format: sourceId:topicId:promptKey,sourceId:topicId:promptKey,...
+      // Parse format: sourceId:targetChannelId:topicId,sourceId:targetChannelId:topicId,...
+      // topicId is optional (0 or omitted means post to main channel, not a topic)
       const channelEntries = channelsConfig.split(",");
 
       for (const entry of channelEntries) {
-        const [sourceId, targetTopicId, promptKey] = entry.split(":");
+        const parts = entry.split(":");
+        const sourceId = parts[0]?.trim();
+        const targetChannelId = parts[1]?.trim();
+        const targetTopicId = parts[2]?.trim();
 
-        if (!sourceId || !targetTopicId || !promptKey) {
+        if (!sourceId || !targetChannelId) {
           this.logger.warn(`Invalid channel config entry: ${entry}`);
           continue;
         }
 
         const config: ChannelConfig = {
-          sourceId: parseInt(sourceId.trim()),
-          targetTopicId: parseInt(targetTopicId.trim()),
-          promptKey: promptKey.trim(),
-          prompt: this.prompts[promptKey.trim()],
+          sourceId: parseInt(sourceId),
+          targetChannelId: parseInt(targetChannelId),
+          targetTopicId: targetTopicId ? parseInt(targetTopicId) : undefined,
         };
 
-        if (!config.prompt && promptKey !== "default") {
-          this.logger.warn(
-            `Prompt key '${promptKey}' not found in prompts.json, will use default`
+        this.channels.push(config);
+
+        if (config.targetTopicId) {
+          this.logger.log(
+            `Configured channel ${config.sourceId} -> channel ${config.targetChannelId}, topic ${config.targetTopicId}`
+          );
+        } else {
+          this.logger.log(
+            `Configured channel ${config.sourceId} -> channel ${config.targetChannelId}`
           );
         }
-
-        this.channels.push(config);
-        this.logger.log(
-          `Configured channel ${config.sourceId} -> topic ${config.targetTopicId} with prompt '${config.promptKey}'`
-        );
       }
 
       if (this.channels.length === 0) {
@@ -192,9 +167,15 @@ export class TranslatorService implements OnModuleInit {
         (event) => this.handleEditedMessageMulti(event, channelConfig)
       );
 
-      this.logger.log(
-        `📢 Listening to channel ${channelConfig.sourceId} -> posting to topic ${channelConfig.targetTopicId}`
-      );
+      if (channelConfig.targetTopicId) {
+        this.logger.log(
+          `📢 Listening to channel ${channelConfig.sourceId} -> posting to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+        );
+      } else {
+        this.logger.log(
+          `📢 Listening to channel ${channelConfig.sourceId} -> posting to channel ${channelConfig.targetChannelId}`
+        );
+      }
     }
   }
 
@@ -329,14 +310,13 @@ export class TranslatorService implements OnModuleInit {
       const messageWithText = messages.find((msg) => msg.message);
       const messageText = messageWithText?.message || "";
 
-      // Translate text if present
-      let translatedText = "";
+      // Replace text if present
+      let processedText = "";
       if (messageText) {
-        translatedText = await this.openaiService.translateToKorean(
-          messageText,
-          channelConfig.prompt
+        processedText = this.replaceText(messageText);
+        this.logger.log(
+          "Text processed (replaced @pass1fybot with @cheapmirror)"
         );
-        this.logger.log("Text translated to Korean");
       }
 
       // Collect all media from the messages
@@ -345,25 +325,50 @@ export class TranslatorService implements OnModuleInit {
         .map((msg) => msg.media);
 
       if (mediaFiles.length > 0) {
-        // Send all media together as an album to the specific topic
-        await this.telegramService.getClient().sendMessage(this.targetGroupId, {
-          message: translatedText || "",
+        // Send all media together as an album
+        const sendOptions: any = {
+          message: processedText || "",
           file: mediaFiles,
-          replyTo: channelConfig.targetTopicId,
-        });
+        };
+        if (channelConfig.targetTopicId) {
+          sendOptions.replyTo = channelConfig.targetTopicId;
+        }
 
-        this.logger.log(
-          `✅ Album with ${mediaFiles.length} items posted to topic ${channelConfig.targetTopicId}`
-        );
+        await this.telegramService
+          .getClient()
+          .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+        if (channelConfig.targetTopicId) {
+          this.logger.log(
+            `✅ Album with ${mediaFiles.length} items posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          );
+        } else {
+          this.logger.log(
+            `✅ Album with ${mediaFiles.length} items posted to channel ${channelConfig.targetChannelId}`
+          );
+        }
       } else {
         // No media, just send text
-        await this.telegramService.getClient().sendMessage(this.targetGroupId, {
-          message: translatedText,
-          replyTo: channelConfig.targetTopicId,
-        });
-        this.logger.log(
-          `Message translated and posted to topic ${channelConfig.targetTopicId}`
-        );
+        const sendOptions: any = {
+          message: processedText,
+        };
+        if (channelConfig.targetTopicId) {
+          sendOptions.replyTo = channelConfig.targetTopicId;
+        }
+
+        await this.telegramService
+          .getClient()
+          .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+        if (channelConfig.targetTopicId) {
+          this.logger.log(
+            `Message posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          );
+        } else {
+          this.logger.log(
+            `Message posted to channel ${channelConfig.targetChannelId}`
+          );
+        }
       }
     } catch (error) {
       this.logger.error(
@@ -383,13 +388,13 @@ export class TranslatorService implements OnModuleInit {
       const messageWithText = messages.find((msg) => msg.message);
       const messageText = messageWithText?.message || "";
 
-      // Translate text if present
-      let translatedText = "";
+      // Replace text if present
+      let processedText = "";
       if (messageText) {
-        translatedText = await this.openaiService.translateToKorean(
-          messageText
+        processedText = this.replaceText(messageText);
+        this.logger.log(
+          "Text processed (replaced @pass1fybot with @cheapmirror)"
         );
-        this.logger.log("Text translated to Korean");
       }
 
       // Collect all media from the messages
@@ -402,7 +407,7 @@ export class TranslatorService implements OnModuleInit {
         await this.telegramService
           .getClient()
           .sendMessage(this.targetChannelId, {
-            message: translatedText || "",
+            message: processedText || "",
             file: mediaFiles,
           });
 
@@ -413,9 +418,9 @@ export class TranslatorService implements OnModuleInit {
         // No media, just send text
         await this.telegramService.sendMessage(
           this.targetChannelId,
-          translatedText
+          processedText
         );
-        this.logger.log("Message translated and posted successfully");
+        this.logger.log("Message posted successfully");
       }
     } catch (error) {
       this.logger.error(
@@ -471,61 +476,61 @@ export class TranslatorService implements OnModuleInit {
         }
       }
 
-      // Translate text if present
-      let translatedText = "";
+      // Replace text if present
+      let processedText = "";
       if (messageText) {
-        translatedText = await this.openaiService.translateToKorean(
-          messageText,
-          channelConfig.prompt
+        processedText = this.replaceText(messageText);
+        this.logger.log(
+          "Text processed (replaced @pass1fybot with @cheapmirror)"
         );
-        this.logger.log("Text translated to Korean");
       }
 
       let sentMessage: any;
 
-      // If message contains a photo, translate the image
-      if (isPhoto) {
-        try {
-          this.logger.log(
-            "📸 Downloading image for translation... Temporary disabled"
-          );
+      // Prepare send options
+      const sendOptions: any = {
+        message: processedText,
+      };
 
-          sentMessage = await this.telegramService
-            .getClient()
-            .sendMessage(this.targetGroupId, {
-              message: translatedText,
-              file: message.media,
-              replyTo: targetReplyToMsgId || channelConfig.targetTopicId,
-            });
-        } catch (imageError) {
-          this.logger.error(
-            `Failed to send image: ${imageError.message}`,
-            imageError.stack
-          );
-        }
-      } else if (hasMedia) {
-        // Other media types (video, audio, documents, etc.)
+      // Add reply-to if needed
+      if (targetReplyToMsgId) {
+        sendOptions.replyTo = targetReplyToMsgId;
+      } else if (channelConfig.targetTopicId) {
+        sendOptions.replyTo = channelConfig.targetTopicId;
+      }
+
+      // If message contains media
+      if (hasMedia) {
+        sendOptions.file = message.media;
+
         sentMessage = await this.telegramService
           .getClient()
-          .sendMessage(this.targetGroupId, {
-            message: translatedText,
-            file: message.media,
-            replyTo: targetReplyToMsgId || channelConfig.targetTopicId,
-          });
-        this.logger.log(
-          `Message with media posted to topic ${channelConfig.targetTopicId}`
-        );
+          .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+        if (channelConfig.targetTopicId) {
+          this.logger.log(
+            `Message with media posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          );
+        } else {
+          this.logger.log(
+            `Message with media posted to channel ${channelConfig.targetChannelId}`
+          );
+        }
       } else {
         // Text-only message
         sentMessage = await this.telegramService
           .getClient()
-          .sendMessage(this.targetGroupId, {
-            message: translatedText,
-            replyTo: targetReplyToMsgId || channelConfig.targetTopicId,
-          });
-        this.logger.log(
-          `Message posted to topic ${channelConfig.targetTopicId}`
-        );
+          .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+        if (channelConfig.targetTopicId) {
+          this.logger.log(
+            `Message posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          );
+        } else {
+          this.logger.log(
+            `Message posted to channel ${channelConfig.targetChannelId}`
+          );
+        }
       }
 
       // Store the message ID mapping
@@ -582,62 +587,34 @@ export class TranslatorService implements OnModuleInit {
         }
       }
 
-      // Translate text if present
-      let translatedText = "";
+      // Replace text if present
+      let processedText = "";
       if (messageText) {
-        translatedText = await this.openaiService.translateToKorean(
-          messageText
+        processedText = this.replaceText(messageText);
+        this.logger.log(
+          "Text processed (replaced @pass1fybot with @cheapmirror)"
         );
-        this.logger.log("Text translated to Korean");
       }
 
       let sentMessage: any;
 
-      // If message contains a photo, translate the image
-      if (isPhoto) {
-        try {
-          this.logger.log(
-            "📸 Downloading image for translation... Temporary disabled"
-          );
-
-          sentMessage = await this.telegramService.sendMessageWithMedia(
-            this.targetChannelId,
-            translatedText,
-            message,
-            targetReplyToMsgId
-          );
-        } catch (imageError) {
-          this.logger.error(
-            `Failed to send image: ${imageError.message}`,
-            imageError.stack
-          );
-          this.logger.warn("Falling back to sending original media");
-          sentMessage = await this.telegramService.sendMessageWithMedia(
-            this.targetChannelId,
-            translatedText,
-            message,
-            targetReplyToMsgId
-          );
-        }
-      } else if (hasMedia) {
-        // Other media types (video, audio, documents, etc.)
+      // If message contains media
+      if (hasMedia) {
         sentMessage = await this.telegramService.sendMessageWithMedia(
           this.targetChannelId,
-          translatedText,
+          processedText,
           message,
           targetReplyToMsgId
         );
-        this.logger.log(
-          "Message with media translated and posted successfully"
-        );
+        this.logger.log("Message with media posted successfully");
       } else {
         // Text-only message
         sentMessage = await this.telegramService.sendMessage(
           this.targetChannelId,
-          translatedText,
+          processedText,
           targetReplyToMsgId
         );
-        this.logger.log("Message translated and posted successfully");
+        this.logger.log("Message posted successfully");
       }
 
       // Store the message ID mapping
@@ -678,26 +655,29 @@ export class TranslatorService implements OnModuleInit {
         return;
       }
 
-      // Translate the new text
-      let translatedText = "";
+      // Replace the new text
+      let processedText = "";
       if (messageText) {
-        translatedText = await this.openaiService.translateToKorean(
-          messageText,
-          channelConfig.prompt
-        );
-        this.logger.log("Edited text translated to Korean");
+        processedText = this.replaceText(messageText);
+        this.logger.log("Edited text processed");
       }
 
-      // Edit the message in the target group
+      // Edit the message in the target channel
       await this.telegramService.editMessage(
-        this.targetGroupId,
+        channelConfig.targetChannelId,
         targetMessageId,
-        translatedText
+        processedText
       );
 
-      this.logger.log(
-        `✅ Message ${targetMessageId} edited successfully in topic ${channelConfig.targetTopicId}`
-      );
+      if (channelConfig.targetTopicId) {
+        this.logger.log(
+          `✅ Message ${targetMessageId} edited successfully in channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+        );
+      } else {
+        this.logger.log(
+          `✅ Message ${targetMessageId} edited successfully in channel ${channelConfig.targetChannelId}`
+        );
+      }
     } catch (error) {
       this.logger.error(
         `Error handling edited message: ${error.message}`,
@@ -724,20 +704,18 @@ export class TranslatorService implements OnModuleInit {
         return;
       }
 
-      // Translate the new text
-      let translatedText = "";
+      // Replace the new text
+      let processedText = "";
       if (messageText) {
-        translatedText = await this.openaiService.translateToKorean(
-          messageText
-        );
-        this.logger.log("Edited text translated to Korean");
+        processedText = this.replaceText(messageText);
+        this.logger.log("Edited text processed");
       }
 
       // Edit the message in the target channel
       await this.telegramService.editMessage(
         this.targetChannelId,
         targetMessageId,
-        translatedText
+        processedText
       );
 
       this.logger.log(

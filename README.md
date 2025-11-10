@@ -1,180 +1,221 @@
-# Telegram Translator Bot
+# Telegram Channel Forwarder
 
-A NestJS-based Telegram bot that automatically translates messages from multiple Telegram channels to a group with topics using OpenAI.
+A NestJS-based Telegram bot that forwards messages from multiple source channels to target channels or topics with simple text replacement.
 
 ## Features
 
-- **Multi-Channel Support**: Monitor multiple source channels simultaneously
-- **Topic-Based Routing**: Post messages to specific topics in a Telegram group
-- **Custom Prompts**: Use different translation prompts for each channel
-- **Flexible Configuration**: Prompts stored in JSON for easy customization
-- **Full Message Support**: Handles text, media, photos, albums, and edits
-- **Thread Preservation**: Maintains reply threads when translating
-- **Legacy Mode**: Backward compatible with single-channel configuration
+- ✅ Forward messages from multiple source channels
+- ✅ Route to different target channels or specific topics within groups
+- ✅ Simple text replacement (@pass1fybot → @cheapmirror)
+- ✅ Support for text, images, videos, documents, and albums
+- ✅ Message edit synchronization
+- ✅ Reply chain preservation
+- ✅ Legacy single-channel mode support
+
+## Recent Changes (v2.0)
+
+### What's New
+
+- **Removed OpenAI Dependency**: No longer requires OpenAI API key or translation service
+- **Simple Text Replacement**: Replaces `@pass1fybot` with `@cheapmirror` in all messages
+- **Multi-Channel Routing**: Route messages from multiple source channels to different target channels
+- **Flexible Topic Support**: Post to specific topics in groups OR regular channels
+
+### Breaking Changes
+
+- OpenAI translation has been removed
+- `prompts.json` is no longer used
+- Configuration format has changed for multi-channel mode
+
+## Installation
+
+```bash
+# Install dependencies
+npm install
+
+# Copy environment file
+cp .env.example .env
+
+# Edit .env with your configuration
+nano .env
+```
 
 ## Configuration
 
-### Multi-Channel Mode (Recommended)
+### Environment Variables
 
-1. **Create `prompts.json`** with your custom translation prompts:
+Edit your `.env` file with the following:
 
-   ```json
-   {
-     "default": "Your default translation prompt...",
-     "crypto": "Your crypto-specific prompt...",
-     "news": "Your news translation prompt...",
-     "casual": "Your casual conversation prompt..."
-   }
-   ```
+```bash
+# Telegram API Credentials (Required)
+# Get from https://my.telegram.org/apps
+TELEGRAM_API_ID=your_api_id
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_PHONE=+1234567890
 
-2. **Configure `.env`** with multi-channel settings:
+# Session name for persistent login
+SESSION_NAME=telegram_translator
 
-   ```env
-   # Telegram API credentials
-   TELEGRAM_API_ID=your_api_id
-   TELEGRAM_API_HASH=your_api_hash
-   TELEGRAM_PHONE=+1234567890
+# Multi-Channel Configuration (see examples below)
+CHANNELS_CONFIG=sourceId:targetChannelId:topicId,sourceId:targetChannelId:topicId,...
+```
 
-   # OpenAI API Key
-   OPENAI_API_KEY=sk-your-openai-api-key
+### Channel Configuration Examples
 
-   # Session name
-   SESSION_NAME=telegram_translator
+#### Example 1: Multiple sources → One group with topics
 
-   # Target group with topics
-   TARGET_GROUP_ID=-1001234567890
+10 source channels posting to Topic 2, and 2 source channels posting to a regular channel:
 
-   # Multi-channel configuration
-   # Format: sourceChannelId:targetTopicId:promptKey,sourceChannelId:targetTopicId:promptKey,...
-   CHANNELS_CONFIG=-1001111111111:123:default,-1002222222222:456:news,-1003333333333:789:crypto
-   ```
+```bash
+CHANNELS_CONFIG=-1001234567890:-1002995160061:2,-1009876543210:-1002995160061:2,-1005555555555:-1002995160061:2,-1001111111111:-1002995160061:2,-1002222222222:-1002995160061:2,-1003333333333:-1002995160061:2,-1004444444444:-1002995160061:2,-1005555555556:-1002995160061:2,-1006666666666:-1002995160061:2,-1007777777777:-1002995160061:2,-1008888888888:-1001999999999,-1009999999999:-1001999999999
+```
 
-   **How to get the IDs:**
+#### Example 2: Mixed routing
 
-   - **Channel ID**: Forward a message from the channel to [@userinfobot](https://t.me/userinfobot)
-   - **Group ID**: Forward a message from the group to [@userinfobot](https://t.me/userinfobot)
-   - **Topic ID**: Open the topic in Telegram Desktop, look at the URL. If the URL shows something like `-1002995160061_2`, use just the number after the underscore (in this case, `2`)
+Some to topics, some to regular channels:
+
+```bash
+CHANNELS_CONFIG=-1001111111111:-1002995160061:5,-1002222222222:-1003456789012
+```
+
+This routes:
+
+- Channel `-1001111111111` → Group `-1002995160061`, Topic `5`
+- Channel `-1002222222222` → Regular channel `-1003456789012`
+
+### Getting Channel and Topic IDs
+
+#### Get Channel ID:
+
+1. Forward a message from the channel to [@userinfobot](https://t.me/userinfobot)
+2. It will show the channel ID (e.g., `-1001234567890`)
+
+#### Get Topic ID:
+
+1. Open the topic in Telegram Desktop or Web
+2. Look at the URL: `https://web.telegram.org/a/#-1002995160061_5`
+3. The number after the underscore is the topic ID (in this case: `5`)
+
+### Configuration Format Details
+
+```
+CHANNELS_CONFIG=sourceId:targetChannelId:topicId,sourceId:targetChannelId:topicId,...
+```
+
+- **sourceId**: Channel ID to listen to (source)
+- **targetChannelId**: Channel ID to post to (destination)
+- **topicId**: _(Optional)_ Topic ID if posting to a group with topics. Omit for regular channels.
 
 ### Legacy Single-Channel Mode
 
-For backward compatibility, you can still use the old configuration:
+Still supported for simple one-to-one forwarding:
 
-```env
-SOURCE_CHANNEL_ID=-12345
-TARGET_CHANNEL_ID=-67890
+```bash
+SOURCE_CHANNEL_ID=-1001234567890
+TARGET_CHANNEL_ID=-1009876543210
 ```
 
-## Custom Prompts
+## Running the Bot
 
-The `prompts.json` file allows you to define multiple translation styles. Each channel can use a different prompt by referencing its key.
+```bash
+# Development
+npm run start:dev
 
-**Example prompts.json:**
-
-```json
-{
-  "default": "Translate Russian to Korean. Keep the tone natural and polite.",
-  "crypto": "Translate crypto trading content from Russian to Korean. Use casual trader language. Translate slang meaningfully.",
-  "news": "Translate news articles from Russian to formal Korean. Use professional tone.",
-  "casual": "Translate casual conversations to informal Korean. Keep emojis and slang."
-}
+# Production
+npm run build
+npm run start:prod
 ```
 
-**Benefits:**
+### First Run
 
-- Large prompts don't clutter environment variables
-- Easy to update without redeploying
-- Channel IDs remain secure in `.env`
-- Version control for prompt changes
+On first run, you'll be prompted to:
 
-## Deployment on Railway
+1. Enter the authentication code sent to your Telegram
+2. Enter your 2FA password (if enabled)
 
-### Prerequisites
+The session will be saved for future runs.
 
-- GitHub account
-- Railway account (sign up at https://railway.app)
-- Telegram API credentials
-- OpenAI API key
+## Text Replacement
 
-### Deployment Steps
+The bot automatically replaces all occurrences of `@pass1fybot` (case-insensitive) with `@cheapmirror` in:
 
-1. **Go to Railway:**
+- Message text
+- Album captions
+- Edited messages
 
-   - Visit https://railway.app
-   - Click "New Project"
-   - Select "Deploy from GitHub repo"
-   - Choose the `telegram_translator` repository
+## Features in Detail
 
-2. **Configure `prompts.json`:**
+### Message Types Supported
 
-   - The `prompts.json` file should be committed to your repository (it contains no sensitive data)
-   - Customize the prompts for your needs
-   - Commit and push to GitHub
+- Text messages
+- Photos
+- Videos
+- Documents
+- Audio
+- Albums (multiple media)
+- Polls
+- Stickers
 
-3. **Configure Environment Variables:**
-   Add the following environment variables in Railway:
+### Message Edit Sync
 
-   ```
-   TELEGRAM_API_ID=your_telegram_api_id
-   TELEGRAM_API_HASH=your_telegram_api_hash
-   TELEGRAM_PHONE=your_phone_number
-   SESSION_NAME=your_session_string
-   TARGET_GROUP_ID=-1001234567890
-   CHANNELS_CONFIG=-1001111111111:123:default,-1002222222222:456:news
-   OPENAI_API_KEY=your_openai_api_key
-   PORT=3000
-   ```
+When a message is edited in the source channel, the bot automatically updates the corresponding message in the target channel.
 
-4. **Deploy:**
+### Reply Preservation
 
-   - Railway will automatically detect the Node.js project
-   - It will run `npm install && npm run build`
-   - Then start the app with `npm run start:prod`
-   - Your bot will be running 24/7!
+The bot maintains reply chains by mapping source message IDs to target message IDs.
 
-5. **Monitor:**
-   - Check the logs in Railway dashboard
-   - Visit the `/health` endpoint to verify the app is running
+## Project Structure
 
-## Local Development
+```
+src/
+├── telegram/
+│   └── telegram.service.ts    # Telegram client wrapper
+├── translator/
+│   └── translator.service.ts  # Message forwarding logic
+├── app.module.ts              # Application module
+└── main.ts                    # Application entry point
+```
 
-1. Clone the repository:
+## Troubleshooting
 
-   ```bash
-   git clone https://github.com/Demiduska/telegram_translator.git
-   cd telegram_translator
-   ```
+### "Session expired" error
 
-2. Install dependencies:
+Delete the session and restart the bot to re-authenticate.
 
-   ```bash
-   npm install
-   ```
+### "Cannot find channel"
 
-3. Customize `prompts.json` with your translation prompts (see Configuration section)
+Make sure:
 
-   - The repository includes `prompts.json` with default prompts
-   - Modify them according to your needs
+1. Your bot account has joined the channel
+2. The channel ID is correct (includes the minus sign)
+3. For private channels, you have access
 
-4. Create `.env` file based on `.env.example` and add your credentials
+### Messages not forwarding
 
-5. Run the application:
-   ```bash
-   npm run start
-   ```
+Check:
 
-## API Endpoints
+1. Channel IDs are correct
+2. Topic IDs are valid (if using topics)
+3. Bot has permission to post in target channel
+4. Check logs for specific errors
 
-- `GET /` - Homepage (service status)
-- `GET /health` - Health check endpoint
+## Development
 
-## Technologies Used
+```bash
+# Run in development mode with auto-reload
+npm run start:dev
 
-- NestJS
-- Telegram MTProto Client
-- OpenAI API
-- TypeScript
-- Express
+# Run tests
+npm run test
+
+# Build for production
+npm run build
+```
 
 ## License
 
-ISC
+MIT
+
+## Support
+
+For issues or questions, please open an issue on GitHub.
