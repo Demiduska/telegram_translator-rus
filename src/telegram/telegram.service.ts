@@ -12,11 +12,15 @@ export class TelegramService implements OnModuleInit {
   private client: TelegramClient;
   private sessionString: string = process.env.SESSION_NAME;
   private isReady: boolean = false;
+  private reconnectInterval: NodeJS.Timeout;
+  private keepaliveInterval: NodeJS.Timeout;
+  private isReconnecting: boolean = false;
 
   constructor() {}
 
   async onModuleInit() {
     await this.initializeClient();
+    this.setupConnectionMonitoring();
   }
 
   private async initializeClient() {
@@ -34,7 +38,11 @@ export class TelegramService implements OnModuleInit {
     const session = new StringSession(this.sessionString);
 
     this.client = new TelegramClient(session, apiId, apiHash, {
-      connectionRetries: 5,
+      connectionRetries: Infinity, // Never stop trying to reconnect
+      autoReconnect: true, // Enable auto-reconnect
+      retryDelay: 1000, // Delay between reconnection attempts
+      timeout: 10, // Socket timeout in seconds
+      requestRetries: 5, // Retry failed requests
     });
 
     await this.client.start({
@@ -66,6 +74,85 @@ export class TelegramService implements OnModuleInit {
     }
 
     this.isReady = true;
+
+    // Set up disconnect handler
+    this.client.addEventHandler(async (update: any) => {
+      if (update && update.className === "UpdateConnectionState") {
+        this.logger.warn("Connection state changed, monitoring...");
+      }
+    });
+  }
+
+  /**
+   * Setup connection monitoring and keepalive
+   */
+  private setupConnectionMonitoring() {
+    // Keepalive ping every 60 seconds to prevent timeout
+    this.keepaliveInterval = setInterval(async () => {
+      try {
+        if (this.client && this.client.connected) {
+          // Simple keepalive check - get account info
+          await this.client.getMe();
+          this.logger.debug("Keepalive ping sent successfully");
+        }
+      } catch (error) {
+        this.logger.error("Keepalive ping failed:", error.message);
+        await this.handleDisconnection();
+      }
+    }, 60000); // 60 seconds
+
+    // Connection check every 30 seconds
+    this.reconnectInterval = setInterval(async () => {
+      try {
+        if (!this.client.connected && !this.isReconnecting) {
+          this.logger.warn("Connection lost, attempting to reconnect...");
+          await this.handleDisconnection();
+        }
+      } catch (error) {
+        this.logger.error("Connection check failed:", error.message);
+      }
+    }, 30000); // 30 seconds
+
+    this.logger.log("Connection monitoring and keepalive enabled");
+  }
+
+  /**
+   * Handle disconnection and reconnect
+   */
+  private async handleDisconnection() {
+    if (this.isReconnecting) {
+      this.logger.debug("Reconnection already in progress, skipping...");
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.isReady = false;
+
+    try {
+      this.logger.warn("Attempting to reconnect to Telegram...");
+
+      // Try to disconnect gracefully first
+      try {
+        if (this.client) {
+          await this.client.disconnect();
+        }
+      } catch (e) {
+        // Ignore disconnect errors
+      }
+
+      // Wait a bit before reconnecting
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Reinitialize the client
+      await this.initializeClient();
+
+      this.logger.log("Successfully reconnected to Telegram");
+    } catch (error) {
+      this.logger.error("Failed to reconnect:", error.message);
+      // Will try again on next interval
+    } finally {
+      this.isReconnecting = false;
+    }
   }
 
   /**
@@ -230,6 +317,14 @@ export class TelegramService implements OnModuleInit {
    * Disconnect the client
    */
   async disconnect() {
+    // Clear intervals
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+    }
+    if (this.reconnectInterval) {
+      clearInterval(this.reconnectInterval);
+    }
+
     if (this.client) {
       await this.client.disconnect();
       this.logger.log("Telegram client disconnected");
