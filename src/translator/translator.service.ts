@@ -16,8 +16,8 @@ export class TranslatorService implements OnModuleInit {
     string,
     { messages: any[]; timeout: NodeJS.Timeout; channelConfig: ChannelConfig }
   > = new Map();
-  // Map to store source message ID -> target message ID
-  private messageMapping: Map<number, number> = new Map();
+  // Map to store source message ID -> (target channel ID -> target message ID)
+  private messageMapping: Map<number, Map<number, number>> = new Map();
 
   // Legacy mode support
   private sourceChannelId: number;
@@ -464,14 +464,15 @@ export class TranslatorService implements OnModuleInit {
       // Check if this is a reply to another message
       let targetReplyToMsgId: number | undefined;
       if (replyToMsgId) {
-        targetReplyToMsgId = this.messageMapping.get(replyToMsgId);
+        const channelMap = this.messageMapping.get(replyToMsgId);
+        targetReplyToMsgId = channelMap?.get(channelConfig.targetChannelId);
         if (targetReplyToMsgId) {
           this.logger.log(
             `This is a reply to message ${replyToMsgId}, will reply to target message ${targetReplyToMsgId}`
           );
         } else {
           this.logger.warn(
-            `This is a reply to message ${replyToMsgId}, but no mapping found in target channel`
+            `This is a reply to message ${replyToMsgId}, but no mapping found in target channel ${channelConfig.targetChannelId}`
           );
         }
       }
@@ -533,11 +534,16 @@ export class TranslatorService implements OnModuleInit {
         }
       }
 
-      // Store the message ID mapping
+      // Store the message ID mapping per channel
       if (sentMessage && sentMessage.id) {
-        this.messageMapping.set(sourceMessageId, sentMessage.id);
+        if (!this.messageMapping.has(sourceMessageId)) {
+          this.messageMapping.set(sourceMessageId, new Map());
+        }
+        this.messageMapping
+          .get(sourceMessageId)!
+          .set(channelConfig.targetChannelId, sentMessage.id);
         this.logger.log(
-          `Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id}`
+          `Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id} (channel ${channelConfig.targetChannelId})`
         );
       }
     } catch (error) {
@@ -575,7 +581,8 @@ export class TranslatorService implements OnModuleInit {
       // Check if this is a reply to another message
       let targetReplyToMsgId: number | undefined;
       if (replyToMsgId) {
-        targetReplyToMsgId = this.messageMapping.get(replyToMsgId);
+        const channelMap = this.messageMapping.get(replyToMsgId);
+        targetReplyToMsgId = channelMap?.get(this.targetChannelId);
         if (targetReplyToMsgId) {
           this.logger.log(
             `This is a reply to message ${replyToMsgId}, will reply to target message ${targetReplyToMsgId}`
@@ -617,9 +624,14 @@ export class TranslatorService implements OnModuleInit {
         this.logger.log("Message posted successfully");
       }
 
-      // Store the message ID mapping
+      // Store the message ID mapping per channel
       if (sentMessage && sentMessage.id) {
-        this.messageMapping.set(sourceMessageId, sentMessage.id);
+        if (!this.messageMapping.has(sourceMessageId)) {
+          this.messageMapping.set(sourceMessageId, new Map());
+        }
+        this.messageMapping
+          .get(sourceMessageId)!
+          .set(this.targetChannelId, sentMessage.id);
         this.logger.log(
           `Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id}`
         );
@@ -645,12 +657,13 @@ export class TranslatorService implements OnModuleInit {
         `Message ${sourceMessageId} was edited in channel ${channelConfig.sourceId}`
       );
 
-      // Check if we have a mapping for this message
-      const targetMessageId = this.messageMapping.get(sourceMessageId);
+      // Check if we have a mapping for this message in this specific channel
+      const channelMap = this.messageMapping.get(sourceMessageId);
+      const targetMessageId = channelMap?.get(channelConfig.targetChannelId);
 
       if (!targetMessageId) {
         this.logger.warn(
-          `No mapping found for edited message ${sourceMessageId}, skipping edit`
+          `No mapping found for edited message ${sourceMessageId} in channel ${channelConfig.targetChannelId}, skipping edit`
         );
         return;
       }
@@ -694,8 +707,9 @@ export class TranslatorService implements OnModuleInit {
 
       this.logger.log(`Message ${sourceMessageId} was edited`);
 
-      // Check if we have a mapping for this message
-      const targetMessageId = this.messageMapping.get(sourceMessageId);
+      // Check if we have a mapping for this message in the target channel
+      const channelMap = this.messageMapping.get(sourceMessageId);
+      const targetMessageId = channelMap?.get(this.targetChannelId);
 
       if (!targetMessageId) {
         this.logger.warn(
