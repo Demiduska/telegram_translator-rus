@@ -298,6 +298,13 @@ export class TelegramService implements OnModuleInit {
       });
       this.logger.log(`Message ${messageId} edited in channel ${channelId}`);
     } catch (error) {
+      // MESSAGE_NOT_MODIFIED is not an error - it just means the message text is already up to date
+      if (error.message && error.message.includes("MESSAGE_NOT_MODIFIED")) {
+        this.logger.debug(
+          `Message ${messageId} in channel ${channelId} is already up to date, no edit needed`
+        );
+        return;
+      }
       this.logger.error(
         `Failed to edit message: ${error.message}`,
         error.stack
