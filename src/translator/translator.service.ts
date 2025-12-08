@@ -45,15 +45,32 @@ export class TranslatorService implements OnModuleInit {
       // Multi-channel mode
       this.logger.log("Using multi-channel configuration mode");
 
-      // Parse format: sourceId:targetChannelId:topicId,sourceId:targetChannelId:topicId,...
+      // Parse format:
+      // 3-part: sourceId:targetChannelId:topicId
+      // 4-part: sourceId:sourceTopicId:targetChannelId:targetTopicId
       // topicId is optional (0 or omitted means post to main channel, not a topic)
       const channelEntries = channelsConfig.split(",");
 
       for (const entry of channelEntries) {
         const parts = entry.split(":");
         const sourceId = parts[0]?.trim();
-        const targetChannelId = parts[1]?.trim();
-        const targetTopicId = parts[2]?.trim();
+
+        let targetChannelId: string;
+        let targetTopicId: string | undefined;
+
+        if (parts.length === 4) {
+          // 4-part format: sourceId:sourceTopicId:targetChannelId:targetTopicId
+          // Note: sourceTopicId (parts[1]) is currently not used for filtering source messages
+          targetChannelId = parts[2]?.trim();
+          targetTopicId = parts[3]?.trim();
+          this.logger.log(
+            `Parsing 4-part config: source=${sourceId}, target channel=${targetChannelId}, target topic=${targetTopicId}`
+          );
+        } else {
+          // 3-part format: sourceId:targetChannelId:targetTopicId
+          targetChannelId = parts[1]?.trim();
+          targetTopicId = parts[2]?.trim();
+        }
 
         if (!sourceId || !targetChannelId) {
           this.logger.warn(`Invalid channel config entry: ${entry}`);

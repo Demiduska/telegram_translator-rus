@@ -88,7 +88,15 @@ This routes:
 #### Get Channel ID:
 
 1. Forward a message from the channel to [@userinfobot](https://t.me/userinfobot)
-2. It will show the channel ID (e.g., `-1001234567890`)
+2. It will show the channel ID:
+   - Regular channels/groups: `-1001234567890` (negative number)
+   - Bot channels: `8432698818` (positive number, no minus sign)
+
+**Note**: Bot channels work exactly the same way as regular channels, just use their positive ID in the configuration. For example:
+
+```bash
+CHANNELS_CONFIG=8432698818:-1002995160061:2,123456789:-1002995160061:5
+```
 
 #### Get Topic ID:
 
