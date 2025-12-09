@@ -4,6 +4,7 @@ import { NewMessageEvent } from "telegram/events";
 
 interface ChannelConfig {
   sourceId: number;
+  sourceTopicId?: number; // Optional: filter messages from this specific source topic
   targetChannelId: number;
   targetTopicId?: number; // Optional: for posting to topics in a group
 }
@@ -98,16 +99,17 @@ export class TranslatorService implements OnModuleInit {
         const parts = entry.split(":");
         const sourceId = parts[0]?.trim();
 
+        let sourceTopicId: string | undefined;
         let targetChannelId: string;
         let targetTopicId: string | undefined;
 
         if (parts.length === 4) {
           // 4-part format: sourceId:sourceTopicId:targetChannelId:targetTopicId
-          // Note: sourceTopicId (parts[1]) is currently not used for filtering source messages
+          sourceTopicId = parts[1]?.trim();
           targetChannelId = parts[2]?.trim();
           targetTopicId = parts[3]?.trim();
           this.logger.log(
-            `Parsing 4-part config: source=${sourceId}, target channel=${targetChannelId}, target topic=${targetTopicId}`
+            `Parsing 4-part config: source=${sourceId}, source topic=${sourceTopicId}, target channel=${targetChannelId}, target topic=${targetTopicId}`
           );
         } else {
           // 3-part format: sourceId:targetChannelId:targetTopicId
@@ -122,13 +124,18 @@ export class TranslatorService implements OnModuleInit {
 
         const config: ChannelConfig = {
           sourceId: parseInt(sourceId),
+          sourceTopicId: sourceTopicId ? parseInt(sourceTopicId) : undefined,
           targetChannelId: parseInt(targetChannelId),
           targetTopicId: targetTopicId ? parseInt(targetTopicId) : undefined,
         };
 
         this.channels.push(config);
 
-        if (config.targetTopicId) {
+        if (config.sourceTopicId && config.targetTopicId) {
+          this.logger.log(
+            `Configured channel ${config.sourceId}, topic ${config.sourceTopicId} -> channel ${config.targetChannelId}, topic ${config.targetTopicId}`
+          );
+        } else if (config.targetTopicId) {
           this.logger.log(
             `Configured channel ${config.sourceId} -> channel ${config.targetChannelId}, topic ${config.targetTopicId}`
           );
@@ -280,8 +287,32 @@ export class TranslatorService implements OnModuleInit {
       const message = event.message;
       const groupedId = (message as any).groupedId?.toString();
 
+      // Get the source topic ID from the message (if it's posted to a topic)
+      const messageTopicId = (message as any).replyTo?.replyToTopId;
+
+      // Filter configs based on source topic ID
+      const applicableConfigs = channelConfigs.filter((config) => {
+        // If config has a source topic filter, check if message matches
+        if (config.sourceTopicId !== undefined) {
+          return messageTopicId === config.sourceTopicId;
+        }
+        // If no source topic filter, accept all messages from this channel
+        return true;
+      });
+
+      if (applicableConfigs.length === 0) {
+        this.logger.debug(
+          `Message from topic ${messageTopicId} doesn't match any configured source topics, skipping`
+        );
+        return;
+      }
+
+      this.logger.log(
+        `Processing message from topic ${messageTopicId}, matched ${applicableConfigs.length} configuration(s)`
+      );
+
       // Process message for each applicable channel config
-      for (const channelConfig of channelConfigs) {
+      for (const channelConfig of applicableConfigs) {
         if (groupedId) {
           // This is part of an album - collect all messages before processing
           const groupKey = `${groupedId}_${channelConfig.targetChannelId}_${
