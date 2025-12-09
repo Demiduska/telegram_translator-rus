@@ -8,6 +8,15 @@ interface ChannelConfig {
   targetTopicId?: number; // Optional: for posting to topics in a group
 }
 
+interface QueuedMessage {
+  type: "single" | "grouped";
+  message?: any;
+  messages?: any[];
+  groupedId?: string;
+  channelConfig: ChannelConfig;
+  retryCount?: number;
+}
+
 @Injectable()
 export class TranslatorService implements OnModuleInit {
   private readonly logger = new Logger(TranslatorService.name);
@@ -19,6 +28,12 @@ export class TranslatorService implements OnModuleInit {
   // Map to store source message ID -> (target channel ID -> target message ID)
   private messageMapping: Map<number, Map<number, number>> = new Map();
 
+  // Message queue and rate limiting
+  private messageQueue: QueuedMessage[] = [];
+  private isProcessingQueue: boolean = false;
+  private readonly MESSAGE_DELAY_MS: number;
+  private readonly MAX_RETRY_ATTEMPTS = 3;
+
   // Legacy mode support
   private sourceChannelId: number;
   private targetChannelId: number;
@@ -27,6 +42,12 @@ export class TranslatorService implements OnModuleInit {
 
   constructor(private readonly telegramService: TelegramService) {
     this.parseChannelConfiguration();
+    // Get message delay from env or use default (2 seconds)
+    this.MESSAGE_DELAY_MS = parseInt(
+      process.env.MESSAGE_DELAY_MS || "2000",
+      10
+    );
+    this.logger.log(`Message delay set to ${this.MESSAGE_DELAY_MS}ms`);
   }
 
   /**
@@ -345,81 +366,13 @@ export class TranslatorService implements OnModuleInit {
         `Processing grouped messages (${messages.length} items) for group ${groupedId} from channel ${channelConfig.sourceId}`
       );
 
-      // Get the text from the first message that has text
-      const messageWithText = messages.find((msg) => msg.message);
-      const messageText = messageWithText?.message || "";
-      const messageEntities = messageWithText?.entities || [];
-
-      // Replace text if present
-      let processedText = "";
-      let adjustedEntities = messageEntities;
-      if (messageText) {
-        processedText = this.replaceText(messageText);
-        adjustedEntities = this.adjustEntities(
-          messageText,
-          processedText,
-          messageEntities
-        );
-        this.logger.log(
-          "Text processed (replaced @pass1fybot with @cheapmirror)"
-        );
-      }
-
-      // Collect all media from the messages
-      const mediaFiles = messages
-        .filter((msg) => msg.media)
-        .map((msg) => msg.media);
-
-      if (mediaFiles.length > 0) {
-        // Send all media together as an album
-        const sendOptions: any = {
-          message: processedText || "",
-          file: mediaFiles,
-        };
-        if (channelConfig.targetTopicId) {
-          sendOptions.replyTo = channelConfig.targetTopicId;
-        }
-        // Preserve message entities (links, mentions, etc.)
-        if (adjustedEntities && adjustedEntities.length > 0) {
-          sendOptions.formattingEntities = adjustedEntities;
-        }
-
-        await this.telegramService
-          .getClient()
-          .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-        if (channelConfig.targetTopicId) {
-          this.logger.log(
-            `✅ Album with ${mediaFiles.length} items posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-          );
-        } else {
-          this.logger.log(
-            `✅ Album with ${mediaFiles.length} items posted to channel ${channelConfig.targetChannelId}`
-          );
-        }
-      } else {
-        // No media, just send text
-        const sendOptions: any = {
-          message: processedText,
-        };
-        if (channelConfig.targetTopicId) {
-          sendOptions.replyTo = channelConfig.targetTopicId;
-        }
-
-        await this.telegramService
-          .getClient()
-          .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-        if (channelConfig.targetTopicId) {
-          this.logger.log(
-            `Message posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-          );
-        } else {
-          this.logger.log(
-            `Message posted to channel ${channelConfig.targetChannelId}`
-          );
-        }
-      }
+      // Add grouped message to queue for rate-limited processing
+      this.addToQueue({
+        type: "grouped",
+        messages: messages,
+        groupedId: groupedId,
+        channelConfig: channelConfig,
+      });
     } catch (error) {
       this.logger.error(
         `Error processing grouped messages: ${error.message}`,
@@ -434,64 +387,19 @@ export class TranslatorService implements OnModuleInit {
         `Processing grouped messages (${messages.length} items) for group ${groupedId}`
       );
 
-      // Get the text from the first message that has text
-      const messageWithText = messages.find((msg) => msg.message);
-      const messageText = messageWithText?.message || "";
-      const messageEntities = messageWithText?.entities || [];
+      // Add grouped message to queue for rate-limited processing
+      // For legacy mode, we need to create a channel config
+      const legacyChannelConfig: ChannelConfig = {
+        sourceId: this.sourceChannelId,
+        targetChannelId: this.targetChannelId,
+      };
 
-      // Replace text if present
-      let processedText = "";
-      let adjustedEntities = messageEntities;
-      if (messageText) {
-        processedText = this.replaceText(messageText);
-        adjustedEntities = this.adjustEntities(
-          messageText,
-          processedText,
-          messageEntities
-        );
-        this.logger.log(
-          "Text processed (replaced @pass1fybot with @cheapmirror)"
-        );
-      }
-
-      // Collect all media from the messages
-      const mediaFiles = messages
-        .filter((msg) => msg.media)
-        .map((msg) => msg.media);
-
-      if (mediaFiles.length > 0) {
-        // Send all media together as an album
-        const sendOptions: any = {
-          message: processedText || "",
-          file: mediaFiles,
-        };
-        // Preserve message entities (links, mentions, etc.)
-        if (adjustedEntities && adjustedEntities.length > 0) {
-          sendOptions.formattingEntities = adjustedEntities;
-        }
-
-        await this.telegramService
-          .getClient()
-          .sendMessage(this.targetChannelId, sendOptions);
-
-        this.logger.log(
-          `✅ Album with ${mediaFiles.length} items posted successfully`
-        );
-      } else {
-        // No media, just send text
-        const sendOptions: any = {
-          message: processedText,
-        };
-        // Preserve message entities (links, mentions, etc.)
-        if (adjustedEntities && adjustedEntities.length > 0) {
-          sendOptions.formattingEntities = adjustedEntities;
-        }
-
-        await this.telegramService
-          .getClient()
-          .sendMessage(this.targetChannelId, sendOptions);
-        this.logger.log("Message posted successfully");
-      }
+      this.addToQueue({
+        type: "grouped",
+        messages: messages,
+        groupedId: groupedId,
+        channelConfig: legacyChannelConfig,
+      });
     } catch (error) {
       this.logger.error(
         `Error processing grouped messages: ${error.message}`,
@@ -508,8 +416,6 @@ export class TranslatorService implements OnModuleInit {
       const messageText = message.message;
       const hasMedia = message.media;
       const isPhoto = hasMedia && (message.media as any).photo !== undefined;
-      const sourceMessageId = message.id;
-      const replyToMsgId = message.replyTo?.replyToMsgId;
 
       // Log message info
       if (hasMedia) {
@@ -531,104 +437,12 @@ export class TranslatorService implements OnModuleInit {
         return;
       }
 
-      // Check if this is a reply to another message
-      let targetReplyToMsgId: number | undefined;
-      if (replyToMsgId) {
-        const channelMap = this.messageMapping.get(replyToMsgId);
-        targetReplyToMsgId = channelMap?.get(channelConfig.targetChannelId);
-        if (targetReplyToMsgId) {
-          this.logger.log(
-            `This is a reply to message ${replyToMsgId}, will reply to target message ${targetReplyToMsgId}`
-          );
-        } else {
-          this.logger.warn(
-            `This is a reply to message ${replyToMsgId}, but no mapping found in target channel ${channelConfig.targetChannelId}`
-          );
-        }
-      }
-
-      // Replace text if present and get entities
-      let processedText = "";
-      const messageEntities = message.entities || [];
-      let adjustedEntities = messageEntities;
-
-      if (messageText) {
-        processedText = this.replaceText(messageText);
-        adjustedEntities = this.adjustEntities(
-          messageText,
-          processedText,
-          messageEntities
-        );
-        this.logger.log(
-          "Text processed (replaced @pass1fybot with @cheapmirror)"
-        );
-      }
-
-      let sentMessage: any;
-
-      // Prepare send options
-      const sendOptions: any = {
-        message: processedText,
-      };
-
-      // Add reply-to if needed
-      if (targetReplyToMsgId) {
-        sendOptions.replyTo = targetReplyToMsgId;
-      } else if (channelConfig.targetTopicId) {
-        sendOptions.replyTo = channelConfig.targetTopicId;
-      }
-
-      // Preserve message entities (links, mentions, etc.)
-      if (adjustedEntities && adjustedEntities.length > 0) {
-        sendOptions.formattingEntities = adjustedEntities;
-      }
-
-      // If message contains media
-      if (hasMedia) {
-        sendOptions.file = message.media;
-
-        sentMessage = await this.telegramService
-          .getClient()
-          .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-        if (channelConfig.targetTopicId) {
-          this.logger.log(
-            `Message with media posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-          );
-        } else {
-          this.logger.log(
-            `Message with media posted to channel ${channelConfig.targetChannelId}`
-          );
-        }
-      } else {
-        // Text-only message
-        sentMessage = await this.telegramService
-          .getClient()
-          .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-        if (channelConfig.targetTopicId) {
-          this.logger.log(
-            `Message posted to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-          );
-        } else {
-          this.logger.log(
-            `Message posted to channel ${channelConfig.targetChannelId}`
-          );
-        }
-      }
-
-      // Store the message ID mapping per channel
-      if (sentMessage && sentMessage.id) {
-        if (!this.messageMapping.has(sourceMessageId)) {
-          this.messageMapping.set(sourceMessageId, new Map());
-        }
-        this.messageMapping
-          .get(sourceMessageId)!
-          .set(channelConfig.targetChannelId, sentMessage.id);
-        this.logger.log(
-          `Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id} (channel ${channelConfig.targetChannelId})`
-        );
-      }
+      // Add message to queue for rate-limited processing
+      this.addToQueue({
+        type: "single",
+        message: message,
+        channelConfig: channelConfig,
+      });
     } catch (error) {
       this.logger.error(
         `Error processing single message: ${error.message}`,
@@ -843,6 +657,285 @@ export class TranslatorService implements OnModuleInit {
         `Error handling edited message: ${error.message}`,
         error.stack
       );
+    }
+  }
+
+  /**
+   * Add message to the queue for rate-limited processing
+   */
+  private addToQueue(queuedMessage: QueuedMessage) {
+    this.messageQueue.push(queuedMessage);
+    this.logger.log(
+      `Message added to queue. Queue size: ${this.messageQueue.length}`
+    );
+
+    // Start processing queue if not already running
+    if (!this.isProcessingQueue) {
+      this.processQueue();
+    }
+  }
+
+  /**
+   * Process messages from the queue with rate limiting
+   */
+  private async processQueue() {
+    if (this.isProcessingQueue) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+    this.logger.log("Started processing message queue");
+
+    while (this.messageQueue.length > 0) {
+      const queuedMessage = this.messageQueue.shift()!;
+
+      try {
+        if (queuedMessage.type === "single") {
+          await this.sendSingleMessage(queuedMessage);
+        } else {
+          await this.sendGroupedMessage(queuedMessage);
+        }
+
+        // Wait before processing next message
+        if (this.messageQueue.length > 0) {
+          this.logger.log(
+            `Waiting ${this.MESSAGE_DELAY_MS}ms before next message...`
+          );
+          await this.sleep(this.MESSAGE_DELAY_MS);
+        }
+      } catch (error) {
+        await this.handleSendError(error, queuedMessage);
+      }
+    }
+
+    this.isProcessingQueue = false;
+    this.logger.log("Finished processing message queue");
+  }
+
+  /**
+   * Handle errors when sending messages, including FloodWaitError
+   */
+  private async handleSendError(error: any, queuedMessage: QueuedMessage) {
+    const isFloodWait = this.isFloodWaitError(error);
+
+    if (isFloodWait) {
+      const waitSeconds = this.extractWaitTime(error);
+      this.logger.warn(
+        `FloodWaitError: Need to wait ${waitSeconds} seconds. Adding message back to queue.`
+      );
+
+      // Increment retry count
+      queuedMessage.retryCount = (queuedMessage.retryCount || 0) + 1;
+
+      if (queuedMessage.retryCount <= this.MAX_RETRY_ATTEMPTS) {
+        // Add back to the front of the queue
+        this.messageQueue.unshift(queuedMessage);
+
+        // Wait for the specified time
+        this.logger.log(`Waiting ${waitSeconds} seconds before retry...`);
+        await this.sleep(waitSeconds * 1000);
+      } else {
+        this.logger.error(
+          `Message exceeded max retry attempts (${this.MAX_RETRY_ATTEMPTS}). Dropping message.`
+        );
+      }
+    } else {
+      this.logger.error(`Error sending message: ${error.message}`, error.stack);
+    }
+  }
+
+  /**
+   * Check if error is a FloodWaitError
+   */
+  private isFloodWaitError(error: any): boolean {
+    return (
+      error.constructor.name === "FloodWaitError" ||
+      error.message?.includes("A wait of") ||
+      error.message?.includes("seconds is required")
+    );
+  }
+
+  /**
+   * Extract wait time from FloodWaitError message
+   */
+  private extractWaitTime(error: any): number {
+    const match = error.message?.match(/wait of (\d+) seconds/);
+    return match ? parseInt(match[1], 10) : 60; // Default to 60 seconds if can't parse
+  }
+
+  /**
+   * Sleep utility
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Send a single message from the queue
+   */
+  private async sendSingleMessage(queuedMessage: QueuedMessage) {
+    const message = queuedMessage.message!;
+    const channelConfig = queuedMessage.channelConfig;
+    const messageText = message.message;
+    const hasMedia = message.media;
+    const isPhoto = hasMedia && (message.media as any).photo !== undefined;
+    const sourceMessageId = message.id;
+    const replyToMsgId = message.replyTo?.replyToMsgId;
+
+    // Log message info
+    if (hasMedia) {
+      this.logger.log(
+        `Sending message with ${isPhoto ? "photo" : "media"} from queue...`
+      );
+    } else if (messageText) {
+      this.logger.log(
+        `Sending text message from queue: ${messageText.substring(0, 50)}...`
+      );
+    }
+
+    // Check if this is a reply to another message
+    let targetReplyToMsgId: number | undefined;
+    if (replyToMsgId) {
+      const channelMap = this.messageMapping.get(replyToMsgId);
+      targetReplyToMsgId = channelMap?.get(channelConfig.targetChannelId);
+    }
+
+    // Replace text if present and get entities
+    let processedText = "";
+    const messageEntities = message.entities || [];
+    let adjustedEntities = messageEntities;
+
+    if (messageText) {
+      processedText = this.replaceText(messageText);
+      adjustedEntities = this.adjustEntities(
+        messageText,
+        processedText,
+        messageEntities
+      );
+    }
+
+    // Prepare send options
+    const sendOptions: any = {
+      message: processedText,
+    };
+
+    // Add reply-to if needed
+    if (targetReplyToMsgId) {
+      sendOptions.replyTo = targetReplyToMsgId;
+    } else if (channelConfig.targetTopicId) {
+      sendOptions.replyTo = channelConfig.targetTopicId;
+    }
+
+    // Preserve message entities (links, mentions, etc.)
+    if (adjustedEntities && adjustedEntities.length > 0) {
+      sendOptions.formattingEntities = adjustedEntities;
+    }
+
+    // If message contains media
+    if (hasMedia) {
+      sendOptions.file = message.media;
+    }
+
+    const sentMessage = await this.telegramService
+      .getClient()
+      .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+    if (channelConfig.targetTopicId) {
+      this.logger.log(
+        `✅ Message sent to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+      );
+    } else {
+      this.logger.log(
+        `✅ Message sent to channel ${channelConfig.targetChannelId}`
+      );
+    }
+
+    // Store the message ID mapping per channel
+    if (sentMessage && sentMessage.id) {
+      if (!this.messageMapping.has(sourceMessageId)) {
+        this.messageMapping.set(sourceMessageId, new Map());
+      }
+      this.messageMapping
+        .get(sourceMessageId)!
+        .set(channelConfig.targetChannelId, sentMessage.id);
+    }
+  }
+
+  /**
+   * Send a grouped message (album) from the queue
+   */
+  private async sendGroupedMessage(queuedMessage: QueuedMessage) {
+    const messages = queuedMessage.messages!;
+    const channelConfig = queuedMessage.channelConfig;
+    const groupedId = queuedMessage.groupedId;
+
+    this.logger.log(
+      `Sending grouped message (${messages.length} items) from queue...`
+    );
+
+    // Get the text from the first message that has text
+    const messageWithText = messages.find((msg) => msg.message);
+    const messageText = messageWithText?.message || "";
+    const messageEntities = messageWithText?.entities || [];
+
+    // Replace text if present
+    let processedText = "";
+    let adjustedEntities = messageEntities;
+    if (messageText) {
+      processedText = this.replaceText(messageText);
+      adjustedEntities = this.adjustEntities(
+        messageText,
+        processedText,
+        messageEntities
+      );
+    }
+
+    // Collect all media from the messages
+    const mediaFiles = messages
+      .filter((msg) => msg.media)
+      .map((msg) => msg.media);
+
+    const sendOptions: any = {
+      message: processedText || "",
+    };
+
+    if (channelConfig.targetTopicId) {
+      sendOptions.replyTo = channelConfig.targetTopicId;
+    }
+
+    if (adjustedEntities && adjustedEntities.length > 0) {
+      sendOptions.formattingEntities = adjustedEntities;
+    }
+
+    if (mediaFiles.length > 0) {
+      sendOptions.file = mediaFiles;
+      await this.telegramService
+        .getClient()
+        .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+      if (channelConfig.targetTopicId) {
+        this.logger.log(
+          `✅ Album with ${mediaFiles.length} items sent to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+        );
+      } else {
+        this.logger.log(
+          `✅ Album with ${mediaFiles.length} items sent to channel ${channelConfig.targetChannelId}`
+        );
+      }
+    } else {
+      await this.telegramService
+        .getClient()
+        .sendMessage(channelConfig.targetChannelId, sendOptions);
+
+      if (channelConfig.targetTopicId) {
+        this.logger.log(
+          `✅ Message sent to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+        );
+      } else {
+        this.logger.log(
+          `✅ Message sent to channel ${channelConfig.targetChannelId}`
+        );
+      }
     }
   }
 }
