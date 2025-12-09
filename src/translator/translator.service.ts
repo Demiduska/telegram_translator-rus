@@ -213,29 +213,46 @@ export class TranslatorService implements OnModuleInit {
 
   private startWatchingMultiChannel() {
     this.logger.log(
-      `Starting to watch ${this.channels.length} channels for messages...`
+      `Starting to watch ${this.channels.length} channel configurations...`
     );
 
-    for (const channelConfig of this.channels) {
-      this.telegramService.addNewMessageHandler(
-        channelConfig.sourceId,
-        (event) => this.handleNewMessageMulti(event, channelConfig)
-      );
+    // Group channel configs by source ID to avoid duplicate handlers
+    const sourceChannelMap = new Map<number, ChannelConfig[]>();
 
-      this.telegramService.addEditedMessageHandler(
-        channelConfig.sourceId,
-        (event) => this.handleEditedMessageMulti(event, channelConfig)
-      );
+    for (const channelConfig of this.channels) {
+      if (!sourceChannelMap.has(channelConfig.sourceId)) {
+        sourceChannelMap.set(channelConfig.sourceId, []);
+      }
+      sourceChannelMap.get(channelConfig.sourceId)!.push(channelConfig);
 
       if (channelConfig.targetTopicId) {
         this.logger.log(
-          `📢 Listening to channel ${channelConfig.sourceId} -> posting to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          `📢 Configured: channel ${channelConfig.sourceId} -> channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
         );
       } else {
         this.logger.log(
-          `📢 Listening to channel ${channelConfig.sourceId} -> posting to channel ${channelConfig.targetChannelId}`
+          `📢 Configured: channel ${channelConfig.sourceId} -> channel ${channelConfig.targetChannelId}`
         );
       }
+    }
+
+    // Add one handler per unique source channel
+    this.logger.log(
+      `Adding handlers for ${sourceChannelMap.size} unique source channels`
+    );
+
+    for (const [sourceId, configs] of sourceChannelMap.entries()) {
+      this.telegramService.addNewMessageHandler(sourceId, (event) =>
+        this.handleNewMessageMultiAll(event, configs)
+      );
+
+      this.telegramService.addEditedMessageHandler(sourceId, (event) =>
+        this.handleEditedMessageMultiAll(event, configs)
+      );
+
+      this.logger.log(
+        `✅ Listening to source channel ${sourceId} (${configs.length} target configurations)`
+      );
     }
   }
 
@@ -255,56 +272,70 @@ export class TranslatorService implements OnModuleInit {
     );
   }
 
-  private async handleNewMessageMulti(
+  private async handleNewMessageMultiAll(
     event: NewMessageEvent,
-    channelConfig: ChannelConfig
+    channelConfigs: ChannelConfig[]
   ) {
     try {
       const message = event.message;
       const groupedId = (message as any).groupedId?.toString();
 
-      if (groupedId) {
-        // This is part of an album - collect all messages before processing
-        if (!this.groupedMessages.has(groupedId)) {
-          this.groupedMessages.set(groupedId, {
-            messages: [],
-            timeout: null as any,
-            channelConfig,
-          });
-        }
+      // Process message for each applicable channel config
+      for (const channelConfig of channelConfigs) {
+        if (groupedId) {
+          // This is part of an album - collect all messages before processing
+          const groupKey = `${groupedId}_${channelConfig.targetChannelId}_${
+            channelConfig.targetTopicId || 0
+          }`;
 
-        const groupData = this.groupedMessages.get(groupedId)!;
-        groupData.messages.push(message);
+          if (!this.groupedMessages.has(groupKey)) {
+            this.groupedMessages.set(groupKey, {
+              messages: [],
+              timeout: null as any,
+              channelConfig,
+            });
+          }
 
-        // Clear existing timeout
-        if (groupData.timeout) {
-          clearTimeout(groupData.timeout);
-        }
+          const groupData = this.groupedMessages.get(groupKey)!;
+          groupData.messages.push(message);
 
-        // Set a new timeout to process the group after 1 second of no new messages
-        groupData.timeout = setTimeout(async () => {
-          await this.processGroupedMessagesMulti(
-            groupedId,
-            groupData.messages,
-            channelConfig
+          // Clear existing timeout
+          if (groupData.timeout) {
+            clearTimeout(groupData.timeout);
+          }
+
+          // Set a new timeout to process the group after 1 second of no new messages
+          groupData.timeout = setTimeout(async () => {
+            await this.processGroupedMessagesMulti(
+              groupKey,
+              groupData.messages,
+              channelConfig
+            );
+            this.groupedMessages.delete(groupKey);
+          }, 1000);
+
+          this.logger.log(
+            `Collected message ${groupData.messages.length} for group ${groupKey}`
           );
-          this.groupedMessages.delete(groupedId);
-        }, 1000);
-
-        this.logger.log(
-          `Collected message ${groupData.messages.length} for group ${groupedId}`
-        );
-        return;
+        } else {
+          // Not part of a group - process immediately
+          await this.processSingleMessageMulti(message, channelConfig);
+        }
       }
-
-      // Not part of a group - process immediately
-      await this.processSingleMessageMulti(message, channelConfig);
     } catch (error) {
       this.logger.error(
         `Error processing message: ${error.message}`,
         error.stack
       );
     }
+  }
+
+  private async handleNewMessageMulti(
+    event: NewMessageEvent,
+    channelConfig: ChannelConfig
+  ) {
+    // Legacy method - kept for compatibility
+    await this.handleNewMessageMultiAll(event, [channelConfig]);
   }
 
   private async handleNewMessage(event: NewMessageEvent) {
@@ -561,9 +592,9 @@ export class TranslatorService implements OnModuleInit {
     }
   }
 
-  private async handleEditedMessageMulti(
+  private async handleEditedMessageMultiAll(
     event: any,
-    channelConfig: ChannelConfig
+    channelConfigs: ChannelConfig[]
   ) {
     try {
       const message = event.message;
@@ -571,42 +602,44 @@ export class TranslatorService implements OnModuleInit {
       const messageText = message.message;
 
       this.logger.log(
-        `Message ${sourceMessageId} was edited in channel ${channelConfig.sourceId}`
+        `Message ${sourceMessageId} was edited, processing ${channelConfigs.length} target configurations`
       );
 
-      // Check if we have a mapping for this message in this specific channel
-      const channelMap = this.messageMapping.get(sourceMessageId);
-      const targetMessageId = channelMap?.get(channelConfig.targetChannelId);
+      // Process edit for each channel config that has this message
+      for (const channelConfig of channelConfigs) {
+        // Check if we have a mapping for this message in this specific channel
+        const channelMap = this.messageMapping.get(sourceMessageId);
+        const targetMessageId = channelMap?.get(channelConfig.targetChannelId);
 
-      if (!targetMessageId) {
-        this.logger.warn(
-          `No mapping found for edited message ${sourceMessageId} in channel ${channelConfig.targetChannelId}, skipping edit`
+        if (!targetMessageId) {
+          this.logger.debug(
+            `No mapping found for edited message ${sourceMessageId} in channel ${channelConfig.targetChannelId}, skipping`
+          );
+          continue;
+        }
+
+        // Replace the new text
+        let processedText = "";
+        if (messageText) {
+          processedText = this.replaceText(messageText);
+        }
+
+        // Edit the message in the target channel
+        await this.telegramService.editMessage(
+          channelConfig.targetChannelId,
+          targetMessageId,
+          processedText
         );
-        return;
-      }
 
-      // Replace the new text
-      let processedText = "";
-      if (messageText) {
-        processedText = this.replaceText(messageText);
-        this.logger.log("Edited text processed");
-      }
-
-      // Edit the message in the target channel
-      await this.telegramService.editMessage(
-        channelConfig.targetChannelId,
-        targetMessageId,
-        processedText
-      );
-
-      if (channelConfig.targetTopicId) {
-        this.logger.log(
-          `✅ Message ${targetMessageId} edited successfully in channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-        );
-      } else {
-        this.logger.log(
-          `✅ Message ${targetMessageId} edited successfully in channel ${channelConfig.targetChannelId}`
-        );
+        if (channelConfig.targetTopicId) {
+          this.logger.log(
+            `✅ Message ${targetMessageId} edited in channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          );
+        } else {
+          this.logger.log(
+            `✅ Message ${targetMessageId} edited in channel ${channelConfig.targetChannelId}`
+          );
+        }
       }
     } catch (error) {
       this.logger.error(
@@ -614,6 +647,14 @@ export class TranslatorService implements OnModuleInit {
         error.stack
       );
     }
+  }
+
+  private async handleEditedMessageMulti(
+    event: any,
+    channelConfig: ChannelConfig
+  ) {
+    // Legacy method - kept for compatibility
+    await this.handleEditedMessageMultiAll(event, [channelConfig]);
   }
 
   private async handleEditedMessage(event: any) {
