@@ -26,8 +26,9 @@ export class TranslatorService implements OnModuleInit {
     string,
     { messages: any[]; timeout: NodeJS.Timeout; channelConfig: ChannelConfig }
   > = new Map();
-  // Map to store source message ID -> (target channel ID -> target message ID)
-  private messageMapping: Map<number, Map<number, number>> = new Map();
+  // Map to store source message ID -> (target channel ID + target topic ID -> target message ID)
+  // Key format: "channelId:topicId" or "channelId" if no topic
+  private messageMapping: Map<number, Map<string, number>> = new Map();
 
   // Message queue and rate limiting
   private messageQueue: QueuedMessage[] = [];
@@ -49,6 +50,14 @@ export class TranslatorService implements OnModuleInit {
       10
     );
     this.logger.log(`Message delay set to ${this.MESSAGE_DELAY_MS}ms`);
+  }
+
+  /**
+   * Generate a unique key for message mapping
+   * Format: "channelId:topicId" or "channelId" if no topic
+   */
+  private getMappingKey(channelId: number, topicId?: number): string {
+    return topicId ? `${channelId}:${topicId}` : `${channelId}`;
   }
 
   /**
@@ -542,7 +551,8 @@ export class TranslatorService implements OnModuleInit {
       let targetReplyToMsgId: number | undefined;
       if (replyToMsgId) {
         const channelMap = this.messageMapping.get(replyToMsgId);
-        targetReplyToMsgId = channelMap?.get(this.targetChannelId);
+        const mappingKey = this.getMappingKey(this.targetChannelId);
+        targetReplyToMsgId = channelMap?.get(mappingKey);
         if (targetReplyToMsgId) {
           this.logger.log(
             `This is a reply to message ${replyToMsgId}, will reply to target message ${targetReplyToMsgId}`
@@ -609,9 +619,10 @@ export class TranslatorService implements OnModuleInit {
         if (!this.messageMapping.has(sourceMessageId)) {
           this.messageMapping.set(sourceMessageId, new Map());
         }
+        const mappingKey = this.getMappingKey(this.targetChannelId);
         this.messageMapping
           .get(sourceMessageId)!
-          .set(this.targetChannelId, sentMessage.id);
+          .set(mappingKey, sentMessage.id);
         this.logger.log(
           `Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id}`
         );
@@ -637,18 +648,47 @@ export class TranslatorService implements OnModuleInit {
         `Message ${sourceMessageId} was edited, processing ${channelConfigs.length} target configurations`
       );
 
+      // Get the source topic ID from the message to match the exact config
+      const messageTopicId = (message as any).replyTo?.replyToMsgId;
+
+      // Keep track of edited messages to avoid duplicates
+      const editedTargets = new Set<string>();
+
       // Process edit for each channel config that has this message
       for (const channelConfig of channelConfigs) {
-        // Check if we have a mapping for this message in this specific channel
+        // Match the config that was used to send this message originally
+        // If the config has a source topic filter, check if it matches
+        if (
+          channelConfig.sourceTopicId !== undefined &&
+          messageTopicId !== channelConfig.sourceTopicId
+        ) {
+          continue;
+        }
+
+        // Check if we have a mapping for this message in this specific channel+topic combination
         const channelMap = this.messageMapping.get(sourceMessageId);
-        const targetMessageId = channelMap?.get(channelConfig.targetChannelId);
+        const mappingKey = this.getMappingKey(
+          channelConfig.targetChannelId,
+          channelConfig.targetTopicId
+        );
+        const targetMessageId = channelMap?.get(mappingKey);
 
         if (!targetMessageId) {
           this.logger.debug(
-            `No mapping found for edited message ${sourceMessageId} in channel ${channelConfig.targetChannelId}, skipping`
+            `No mapping found for edited message ${sourceMessageId} with key ${mappingKey}, skipping`
           );
           continue;
         }
+
+        // Check if we already edited this target message (prevent duplicates)
+        const targetKey = `${channelConfig.targetChannelId}:${targetMessageId}`;
+        if (editedTargets.has(targetKey)) {
+          this.logger.debug(
+            `Already edited message ${targetMessageId} in channel ${channelConfig.targetChannelId}, skipping duplicate`
+          );
+          continue;
+        }
+        editedTargets.add(targetKey);
 
         // Replace the new text
         let processedText = "";
@@ -699,7 +739,8 @@ export class TranslatorService implements OnModuleInit {
 
       // Check if we have a mapping for this message in the target channel
       const channelMap = this.messageMapping.get(sourceMessageId);
-      const targetMessageId = channelMap?.get(this.targetChannelId);
+      const mappingKey = this.getMappingKey(this.targetChannelId);
+      const targetMessageId = channelMap?.get(mappingKey);
 
       if (!targetMessageId) {
         this.logger.warn(
@@ -870,7 +911,11 @@ export class TranslatorService implements OnModuleInit {
     let targetReplyToMsgId: number | undefined;
     if (replyToMsgId) {
       const channelMap = this.messageMapping.get(replyToMsgId);
-      targetReplyToMsgId = channelMap?.get(channelConfig.targetChannelId);
+      const replyMappingKey = this.getMappingKey(
+        channelConfig.targetChannelId,
+        channelConfig.targetTopicId
+      );
+      targetReplyToMsgId = channelMap?.get(replyMappingKey);
     }
 
     // Replace text if present and get entities
@@ -923,14 +968,16 @@ export class TranslatorService implements OnModuleInit {
       );
     }
 
-    // Store the message ID mapping per channel
+    // Store the message ID mapping per channel+topic
     if (sentMessage && sentMessage.id) {
       if (!this.messageMapping.has(sourceMessageId)) {
         this.messageMapping.set(sourceMessageId, new Map());
       }
-      this.messageMapping
-        .get(sourceMessageId)!
-        .set(channelConfig.targetChannelId, sentMessage.id);
+      const mappingKey = this.getMappingKey(
+        channelConfig.targetChannelId,
+        channelConfig.targetTopicId
+      );
+      this.messageMapping.get(sourceMessageId)!.set(mappingKey, sentMessage.id);
     }
   }
 
