@@ -7,6 +7,7 @@ interface ChannelConfig {
   sourceTopicId?: number; // Optional: filter messages from this specific source topic
   targetChannelId: number;
   targetTopicId?: number; // Optional: for posting to topics in a group
+  searchKeyword?: string; // Optional: only forward messages containing this keyword (case-insensitive)
 }
 
 interface QueuedMessage {
@@ -93,6 +94,61 @@ export class TranslatorService implements OnModuleInit {
 
   private parseChannelConfiguration() {
     const channelsConfig = process.env.CHANNELS_CONFIG;
+    const searchConfig = process.env.SEARCH_CONFIG;
+
+    // Parse search-based configurations first
+    if (searchConfig) {
+      this.logger.log("Parsing SEARCH_CONFIG for keyword-based forwarding");
+
+      const searchEntries = searchConfig.split(",");
+
+      for (const entry of searchEntries) {
+        // Format: s-keyword:sourceId:sourceTopicId:targetChannelId
+        // Example: s-Gate:-1003316223699:6:-1003540006367
+        if (!entry.trim().startsWith("s-")) {
+          this.logger.warn(
+            `Invalid search config entry (must start with s-): ${entry}`
+          );
+          continue;
+        }
+
+        const parts = entry.split(":");
+        if (parts.length < 3) {
+          this.logger.warn(`Invalid search config entry: ${entry}`);
+          continue;
+        }
+
+        // Extract keyword from first part (remove "s-" prefix)
+        const keyword = parts[0]?.trim().substring(2);
+        const sourceId = parts[1]?.trim();
+        const sourceTopicId = parts[2]?.trim();
+        const targetChannelId = parts[3]?.trim();
+
+        if (!keyword || !sourceId || !targetChannelId) {
+          this.logger.warn(`Invalid search config entry: ${entry}`);
+          continue;
+        }
+
+        const config: ChannelConfig = {
+          sourceId: parseInt(sourceId),
+          sourceTopicId: sourceTopicId ? parseInt(sourceTopicId) : undefined,
+          targetChannelId: parseInt(targetChannelId),
+          searchKeyword: keyword.toLowerCase(), // Store in lowercase for case-insensitive matching
+        };
+
+        this.channels.push(config);
+
+        if (config.sourceTopicId) {
+          this.logger.log(
+            `🔍 Search configured: keyword="${config.searchKeyword}" in channel ${config.sourceId}, topic ${config.sourceTopicId} -> channel ${config.targetChannelId}`
+          );
+        } else {
+          this.logger.log(
+            `🔍 Search configured: keyword="${config.searchKeyword}" in channel ${config.sourceId} -> channel ${config.targetChannelId}`
+          );
+        }
+      }
+    }
 
     if (channelsConfig) {
       // Multi-channel mode
@@ -488,6 +544,22 @@ export class TranslatorService implements OnModuleInit {
       const messageText = message.message;
       const hasMedia = message.media;
       const isPhoto = hasMedia && (message.media as any).photo !== undefined;
+
+      // If this config has a search keyword, check if the message contains it
+      if (channelConfig.searchKeyword) {
+        const messageTextLower = messageText ? messageText.toLowerCase() : "";
+
+        if (!messageTextLower.includes(channelConfig.searchKeyword)) {
+          this.logger.debug(
+            `Message doesn't contain keyword "${channelConfig.searchKeyword}", skipping`
+          );
+          return;
+        }
+
+        this.logger.log(
+          `✅ Keyword "${channelConfig.searchKeyword}" found in message!`
+        );
+      }
 
       // Log message info
       if (hasMedia) {
