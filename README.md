@@ -8,6 +8,8 @@ A NestJS-based Telegram bot that forwards messages from multiple source channels
 - ✅ Route to different target channels or specific topics within groups
 - ✅ Simple text replacement (@pass1fybot → @cheapmirror)
 - ✅ Support for text, images, videos, documents, and albums
+- ✅ **Inline keyboard buttons/links preservation** - Automatically includes buttons from original posts
+- ✅ **Case-insensitive keyword search** - Filter messages by keywords (matches "Gate", "GATE", "gate", "GateIO", etc.)
 - ✅ Message edit synchronization
 - ✅ Reply chain preservation
 - ✅ Legacy single-channel mode support
@@ -171,6 +173,46 @@ When a message is edited in the source channel, the bot automatically updates th
 ### Reply Preservation
 
 The bot maintains reply chains by mapping source message IDs to target message IDs.
+
+### Inline Keyboard Buttons/Links
+
+The bot **automatically preserves inline keyboard buttons** (reply markup) from the original messages. This includes:
+
+- URL buttons (links to external websites)
+- Callback buttons
+- Any other inline keyboard elements
+
+When a message with buttons is forwarded, all buttons are included in the resent post, maintaining the same functionality and links.
+
+### Keyword Search Filtering
+
+The bot supports **case-insensitive keyword filtering** using the `SEARCH_CONFIG` environment variable.
+
+**How it works:**
+
+- When you search for a keyword like `s-Gate`, the bot will match:
+  - `GATE` (all uppercase)
+  - `gate` (all lowercase)
+  - `Gate` (mixed case)
+  - `Gate:` (with punctuation)
+  - `GateIO` (as part of a word)
+  - Any other combination containing "gate"
+
+**Example configuration:**
+
+```bash
+SEARCH_CONFIG=s-Gate:-1003316223699:6:-1003540006367
+```
+
+This will monitor channel `-1003316223699`, topic `6`, and forward only messages containing the word "gate" (case-insensitive) to channel `-1003540006367`.
+
+**Multiple keywords:**
+
+```bash
+SEARCH_CONFIG=s-Gate:-1003316223699:6:-1003540006367,s-urgent:-1002345678901:5:-1003987654321
+```
+
+**Note:** `SEARCH_CONFIG` works alongside `CHANNELS_CONFIG`. You can use both - `SEARCH_CONFIG` for keyword filtering and `CHANNELS_CONFIG` for forwarding all messages.
 
 ## Project Structure
 

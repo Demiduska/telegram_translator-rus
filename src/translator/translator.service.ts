@@ -670,6 +670,14 @@ export class TranslatorService implements OnModuleInit {
         sendOptions.formattingEntities = adjustedEntities;
       }
 
+      // Preserve inline keyboard buttons (reply markup)
+      if (message.replyMarkup) {
+        sendOptions.buttons = message.replyMarkup;
+        this.logger.log(
+          "Including inline keyboard buttons from original message"
+        );
+      }
+
       // If message contains media
       if (hasMedia) {
         sendOptions.file = message.media;
@@ -1021,6 +1029,14 @@ export class TranslatorService implements OnModuleInit {
       sendOptions.formattingEntities = adjustedEntities;
     }
 
+    // Preserve inline keyboard buttons (reply markup)
+    if (message.replyMarkup) {
+      sendOptions.buttons = message.replyMarkup;
+      this.logger.log(
+        "Including inline keyboard buttons from original message"
+      );
+    }
+
     // If message contains media
     if (hasMedia) {
       sendOptions.file = message.media;
@@ -1097,6 +1113,13 @@ export class TranslatorService implements OnModuleInit {
 
     if (adjustedEntities && adjustedEntities.length > 0) {
       sendOptions.formattingEntities = adjustedEntities;
+    }
+
+    // Preserve inline keyboard buttons from any message in the group that has them
+    const messageWithButtons = messages.find((msg) => msg.replyMarkup);
+    if (messageWithButtons && messageWithButtons.replyMarkup) {
+      sendOptions.buttons = messageWithButtons.replyMarkup;
+      this.logger.log("Including inline keyboard buttons from grouped message");
     }
 
     if (mediaFiles.length > 0) {
