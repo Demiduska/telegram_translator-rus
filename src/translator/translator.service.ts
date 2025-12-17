@@ -3,6 +3,8 @@ import { TelegramService } from "../telegram/telegram.service";
 import { NewMessageEvent } from "telegram/events";
 import { Api } from "telegram/tl";
 import { ChannelConfig, ChannelConfigParserService } from "./config";
+import { sleep } from "../common/utils";
+import { MESSAGE_PROCESSING, TEXT_REPLACEMENTS } from "../common/constants";
 
 interface QueuedMessage {
   type: "single" | "grouped";
@@ -29,7 +31,7 @@ export class TranslatorService implements OnModuleInit {
   private messageQueue: QueuedMessage[] = [];
   private isProcessingQueue: boolean = false;
   private readonly MESSAGE_DELAY_MS: number;
-  private readonly MAX_RETRY_ATTEMPTS = 3;
+  private readonly MAX_RETRY_ATTEMPTS = MESSAGE_PROCESSING.MAX_RETRY_ATTEMPTS;
 
   // Legacy mode support
   private sourceChannelId: number;
@@ -798,7 +800,7 @@ export class TranslatorService implements OnModuleInit {
           this.logger.log(
             `Waiting ${this.MESSAGE_DELAY_MS}ms before next message...`
           );
-          await this.sleep(this.MESSAGE_DELAY_MS);
+          await sleep(this.MESSAGE_DELAY_MS);
         }
       } catch (error) {
         await this.handleSendError(error, queuedMessage);
@@ -830,7 +832,7 @@ export class TranslatorService implements OnModuleInit {
 
         // Wait for the specified time
         this.logger.log(`Waiting ${waitSeconds} seconds before retry...`);
-        await this.sleep(waitSeconds * 1000);
+        await sleep(waitSeconds * 1000);
       } else {
         this.logger.error(
           `Message exceeded max retry attempts (${this.MAX_RETRY_ATTEMPTS}). Dropping message.`
@@ -858,13 +860,6 @@ export class TranslatorService implements OnModuleInit {
   private extractWaitTime(error: any): number {
     const match = error.message?.match(/wait of (\d+) seconds/);
     return match ? parseInt(match[1], 10) : 60; // Default to 60 seconds if can't parse
-  }
-
-  /**
-   * Sleep utility
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
