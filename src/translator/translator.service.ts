@@ -1036,10 +1036,20 @@ export class TranslatorService implements OnModuleInit {
           message.replyMarkup.className || "unknown"
         )}`
       );
-      sendOptions.buttons = message.replyMarkup;
-      this.logger.log(
-        "Including inline keyboard buttons from original message"
-      );
+
+      // Extract button rows from ReplyInlineMarkup or ReplyKeyboardMarkup
+      if (message.replyMarkup.rows && message.replyMarkup.rows.length > 0) {
+        sendOptions.buttons = message.replyMarkup.rows;
+        this.logger.log(
+          `Including ${message.replyMarkup.rows.length} row(s) of inline keyboard buttons from original message`
+        );
+      } else {
+        // Fallback: try passing the whole markup object
+        sendOptions.buttons = message.replyMarkup;
+        this.logger.log(
+          "Including inline keyboard buttons from original message (full markup)"
+        );
+      }
     } else {
       this.logger.debug("No reply markup found in message");
     }
