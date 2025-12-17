@@ -1030,52 +1030,17 @@ export class TranslatorService implements OnModuleInit {
     }
 
     // Preserve inline keyboard buttons (reply markup)
+    // According to GramJS types: buttons?: MarkupLike where MarkupLike includes Api.TypeReplyMarkup
     if (message.replyMarkup) {
       this.logger.log(
-        `🔘 Detected reply markup in message: ${
+        `🔘 Detected reply markup: ${
           message.replyMarkup.className || "unknown"
-        }`
+        } with ${message.replyMarkup.rows?.length || 0} row(s)`
       );
 
-      // Try different approaches to preserve buttons
-      try {
-        // Log the structure to debug
-        this.logger.log(
-          `Button structure: rows=${message.replyMarkup.rows?.length || 0}`
-        );
-
-        // GramJS expects the buttons in a specific format
-        // For inline keyboards, we need to extract button data
-        if (
-          message.replyMarkup.className === "ReplyInlineMarkup" &&
-          message.replyMarkup.rows
-        ) {
-          // Extract button data from rows
-          const buttonRows = message.replyMarkup.rows.map((row: any) => {
-            return row.buttons || row;
-          });
-
-          sendOptions.buttons = buttonRows;
-          this.logger.log(
-            `✅ Extracted ${buttonRows.length} row(s) of buttons with ${
-              buttonRows[0]?.length || 0
-            } button(s) in first row`
-          );
-        } else {
-          // Fallback for other markup types
-          sendOptions.buttons = message.replyMarkup;
-          this.logger.log("Using full markup object as fallback");
-        }
-      } catch (error) {
-        this.logger.error(
-          `Error processing reply markup: ${error.message}`,
-          error.stack
-        );
-        // Try one more fallback - pass the original markup
-        sendOptions.buttons = message.replyMarkup;
-      }
-    } else {
-      this.logger.debug("No reply markup found in message");
+      // Pass the complete replyMarkup object as it implements Api.TypeReplyMarkup
+      sendOptions.buttons = message.replyMarkup;
+      this.logger.log("✅ Including reply markup buttons in message");
     }
 
     // If message contains media
