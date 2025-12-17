@@ -63,6 +63,38 @@ export class TranslatorService implements OnModuleInit {
   }
 
   /**
+   * Extract links from inline buttons in reply markup
+   */
+  private extractButtonLinks(message: any): string[] {
+    if (!message.replyMarkup?.rows) return [];
+
+    const links: string[] = [];
+
+    for (const row of message.replyMarkup.rows) {
+      for (const button of row.buttons) {
+        if (
+          button.className === "KeyboardButtonUrl" &&
+          button.text &&
+          button.url
+        ) {
+          links.push(`${button.text} → ${button.url}`);
+        }
+      }
+    }
+
+    return links;
+  }
+
+  /**
+   * Append button links to message text
+   */
+  private appendLinksToMessage(originalText: string, links: string[]): string {
+    if (links.length === 0) return originalText;
+
+    return originalText + "\n\n" + links.join("\n");
+  }
+
+  /**
    * Simple text replacement function
    * Replaces @pass1fybot with @cheapmirror
    */
@@ -1013,6 +1045,13 @@ export class TranslatorService implements OnModuleInit {
       );
     }
 
+    // Extract button links and append them to message text
+    const buttonLinks = this.extractButtonLinks(message);
+    if (buttonLinks.length > 0) {
+      this.logger.log(`🔗 Converted ${buttonLinks.length} button(s) to links`);
+      processedText = this.appendLinksToMessage(processedText, buttonLinks);
+    }
+
     // Prepare send options
     const sendOptions: any = {
       message: processedText,
@@ -1030,16 +1069,8 @@ export class TranslatorService implements OnModuleInit {
       sendOptions.formattingEntities = adjustedEntities;
     }
 
-    // Preserve inline keyboard buttons (reply markup)
-    if (message.replyMarkup) {
-      this.logger.log(
-        `🔘 Detected reply markup: ${
-          message.replyMarkup.className || "unknown"
-        }`
-      );
-
-      sendOptions.replyMarkup = message.replyMarkup;
-    }
+    // Don't include reply markup (buttons) since we converted them to text links
+    // Telegram blocks buttons in resent messages anyway
 
     // If message contains media
     if (hasMedia) {
@@ -1102,6 +1133,18 @@ export class TranslatorService implements OnModuleInit {
       );
     }
 
+    // Extract button links from any message in the group that has them
+    const messageWithButtons = messages.find((msg) => msg.replyMarkup);
+    if (messageWithButtons) {
+      const buttonLinks = this.extractButtonLinks(messageWithButtons);
+      if (buttonLinks.length > 0) {
+        this.logger.log(
+          `🔗 Converted ${buttonLinks.length} button(s) to links in grouped message`
+        );
+        processedText = this.appendLinksToMessage(processedText, buttonLinks);
+      }
+    }
+
     // Collect all media from the messages
     const mediaFiles = messages
       .filter((msg) => msg.media)
@@ -1119,12 +1162,8 @@ export class TranslatorService implements OnModuleInit {
       sendOptions.formattingEntities = adjustedEntities;
     }
 
-    // Preserve inline keyboard buttons from any message in the group that has them
-    const messageWithButtons = messages.find((msg) => msg.replyMarkup);
-    if (messageWithButtons && messageWithButtons.replyMarkup) {
-      sendOptions.buttons = messageWithButtons.replyMarkup;
-      this.logger.log("Including inline keyboard buttons from grouped message");
-    }
+    // Don't include reply markup (buttons) since we converted them to text links
+    // Telegram blocks buttons in resent messages anyway
 
     if (mediaFiles.length > 0) {
       sendOptions.file = mediaFiles;
