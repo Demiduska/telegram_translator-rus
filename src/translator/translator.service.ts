@@ -1032,23 +1032,47 @@ export class TranslatorService implements OnModuleInit {
     // Preserve inline keyboard buttons (reply markup)
     if (message.replyMarkup) {
       this.logger.log(
-        `🔘 Detected reply markup in message: ${JSON.stringify(
+        `🔘 Detected reply markup in message: ${
           message.replyMarkup.className || "unknown"
-        )}`
+        }`
       );
 
-      // Extract button rows from ReplyInlineMarkup or ReplyKeyboardMarkup
-      if (message.replyMarkup.rows && message.replyMarkup.rows.length > 0) {
-        sendOptions.buttons = message.replyMarkup.rows;
+      // Try different approaches to preserve buttons
+      try {
+        // Log the structure to debug
         this.logger.log(
-          `Including ${message.replyMarkup.rows.length} row(s) of inline keyboard buttons from original message`
+          `Button structure: rows=${message.replyMarkup.rows?.length || 0}`
         );
-      } else {
-        // Fallback: try passing the whole markup object
+
+        // GramJS expects the buttons in a specific format
+        // For inline keyboards, we need to extract button data
+        if (
+          message.replyMarkup.className === "ReplyInlineMarkup" &&
+          message.replyMarkup.rows
+        ) {
+          // Extract button data from rows
+          const buttonRows = message.replyMarkup.rows.map((row: any) => {
+            return row.buttons || row;
+          });
+
+          sendOptions.buttons = buttonRows;
+          this.logger.log(
+            `✅ Extracted ${buttonRows.length} row(s) of buttons with ${
+              buttonRows[0]?.length || 0
+            } button(s) in first row`
+          );
+        } else {
+          // Fallback for other markup types
+          sendOptions.buttons = message.replyMarkup;
+          this.logger.log("Using full markup object as fallback");
+        }
+      } catch (error) {
+        this.logger.error(
+          `Error processing reply markup: ${error.message}`,
+          error.stack
+        );
+        // Try one more fallback - pass the original markup
         sendOptions.buttons = message.replyMarkup;
-        this.logger.log(
-          "Including inline keyboard buttons from original message (full markup)"
-        );
       }
     } else {
       this.logger.debug("No reply markup found in message");
