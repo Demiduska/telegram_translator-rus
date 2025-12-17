@@ -1031,10 +1031,17 @@ export class TranslatorService implements OnModuleInit {
 
     // Preserve inline keyboard buttons (reply markup)
     if (message.replyMarkup) {
+      this.logger.log(
+        `🔘 Detected reply markup in message: ${JSON.stringify(
+          message.replyMarkup.className || "unknown"
+        )}`
+      );
       sendOptions.buttons = message.replyMarkup;
       this.logger.log(
         "Including inline keyboard buttons from original message"
       );
+    } else {
+      this.logger.debug("No reply markup found in message");
     }
 
     // If message contains media
