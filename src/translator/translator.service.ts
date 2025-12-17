@@ -1038,6 +1038,10 @@ export class TranslatorService implements OnModuleInit {
         } with ${message.replyMarkup.rows?.length || 0} row(s)`
       );
 
+      this.logger.log(
+        `🔘 Markup is with ${JSON.stringify(message.replyMarkup.rows)} row(s)`
+      );
+
       // Pass the complete replyMarkup object as it implements Api.TypeReplyMarkup
       sendOptions.buttons = message.replyMarkup;
       this.logger.log("✅ Including reply markup buttons in message");
