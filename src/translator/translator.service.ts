@@ -1031,53 +1031,14 @@ export class TranslatorService implements OnModuleInit {
     }
 
     // Preserve inline keyboard buttons (reply markup)
-    // Reconstruct the markup using GramJS API constructors
-    if (message.replyMarkup && message.replyMarkup.rows) {
+    if (message.replyMarkup) {
       this.logger.log(
         `🔘 Detected reply markup: ${
           message.replyMarkup.className || "unknown"
-        } with ${message.replyMarkup.rows.length} row(s)`
+        }`
       );
 
-      try {
-        // Reconstruct button rows using GramJS API
-        const buttonRows = message.replyMarkup.rows.map((row: any) => {
-          const buttons = row.buttons.map((button: any) => {
-            // Handle different button types
-            if (button.className === "KeyboardButtonUrl") {
-              return new Api.KeyboardButtonUrl({
-                text: button.text,
-                url: button.url,
-              });
-            } else if (button.className === "KeyboardButtonCallback") {
-              return new Api.KeyboardButtonCallback({
-                text: button.text,
-                data: button.data,
-              });
-            }
-            // Add more button types as needed
-            return button;
-          });
-          return new Api.KeyboardButtonRow({ buttons });
-        });
-
-        // Create a new ReplyInlineMarkup with reconstructed buttons
-        const reconstructedMarkup = new Api.ReplyInlineMarkup({
-          rows: buttonRows,
-        });
-
-        sendOptions.buttons = reconstructedMarkup;
-        this.logger.log(
-          `✅ Reconstructed and included ${buttonRows.length} row(s) of inline keyboard buttons`
-        );
-      } catch (error) {
-        this.logger.error(
-          `Error reconstructing reply markup: ${error.message}`,
-          error.stack
-        );
-        // Fallback to original markup
-        sendOptions.buttons = message.replyMarkup;
-      }
+      sendOptions.replyMarkup = message.replyMarkup;
     }
 
     // If message contains media
