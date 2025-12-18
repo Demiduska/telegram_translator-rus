@@ -883,6 +883,13 @@ export class TranslatorService implements OnModuleInit {
     const replyToMsgId = message.replyTo?.replyToMsgId;
     const replyToTopicId = message.replyTo?.replyToTopicId;
 
+    // Debug logging for reply structure
+    if (message.replyTo) {
+      this.logger.log(
+        `🔍 Reply structure - replyToMsgId: ${replyToMsgId}, replyToTopicId: ${replyToTopicId}`
+      );
+    }
+
     // Log message info
     if (hasMedia) {
       this.logger.log(
@@ -900,22 +907,43 @@ export class TranslatorService implements OnModuleInit {
     const isActualReply =
       replyToMsgId && (!replyToTopicId || replyToMsgId !== replyToTopicId);
 
+    this.logger.log(
+      `🔍 Reply detection - isActualReply: ${isActualReply}, replyToMsgId: ${replyToMsgId}, replyToTopicId: ${replyToTopicId}`
+    );
+
     if (isActualReply) {
       this.logger.log(
-        `This is a reply to message ${replyToMsgId}, looking up target message...`
+        `📍 This is a reply to message ${replyToMsgId}, looking up target message...`
       );
+
+      // Debug: Show all stored mappings for this source message
       const channelMap = this.messageMapping.get(replyToMsgId);
+      if (channelMap) {
+        this.logger.log(
+          `📋 Available mappings for source message ${replyToMsgId}:`
+        );
+        for (const [key, targetId] of channelMap.entries()) {
+          this.logger.log(`   - ${key} -> ${targetId}`);
+        }
+      } else {
+        this.logger.warn(
+          `⚠️ No mappings found for source message ${replyToMsgId}`
+        );
+      }
+
       const replyMappingKey = this.getMappingKey(
         channelConfig.targetChannelId,
         channelConfig.targetTopicId
       );
+      this.logger.log(`🔑 Looking for mapping key: ${replyMappingKey}`);
+
       targetReplyToMsgId = channelMap?.get(replyMappingKey);
 
       if (targetReplyToMsgId) {
         this.logger.log(`✅ Found target reply message: ${targetReplyToMsgId}`);
       } else {
         this.logger.warn(
-          `⚠️ No mapping found for reply to message ${replyToMsgId}`
+          `⚠️ No mapping found for reply to message ${replyToMsgId} with key ${replyMappingKey}`
         );
       }
     }
