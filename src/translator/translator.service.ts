@@ -256,8 +256,11 @@ export class TranslatorService implements OnModuleInit {
       const groupedId = (message as any).groupedId?.toString();
 
       // Get the source topic ID from the message (if it's posted to a topic)
-      // In Telegram forums, messages in topics have replyTo.replyToMsgId pointing to the topic's root message ID
-      const messageTopicId = (message as any).replyTo?.replyToMsgId;
+      // In Telegram forums, messages in topics have replyTo.replyToTopicId pointing to the topic's root message ID
+      // replyTo.replyToMsgId can be different if it's a reply to a specific message
+      const messageTopicId =
+        (message as any).replyTo?.replyToTopicId ||
+        (message as any).replyTo?.replyToMsgId;
 
       // Filter configs based on source topic ID
       const applicableConfigs = channelConfigs.filter((config) => {
@@ -878,6 +881,7 @@ export class TranslatorService implements OnModuleInit {
     const isPhoto = hasMedia && (message.media as any).photo !== undefined;
     const sourceMessageId = message.id;
     const replyToMsgId = message.replyTo?.replyToMsgId;
+    const replyToTopicId = message.replyTo?.replyToTopicId;
 
     // Log message info
     if (hasMedia) {
@@ -890,15 +894,30 @@ export class TranslatorService implements OnModuleInit {
       );
     }
 
-    // Check if this is a reply to another message
+    // Check if this is a reply to another message (not just to the topic root)
+    // In forum topics: replyToTopicId = topic root, replyToMsgId = actual message being replied to
     let targetReplyToMsgId: number | undefined;
-    if (replyToMsgId) {
+    const isActualReply =
+      replyToMsgId && (!replyToTopicId || replyToMsgId !== replyToTopicId);
+
+    if (isActualReply) {
+      this.logger.log(
+        `This is a reply to message ${replyToMsgId}, looking up target message...`
+      );
       const channelMap = this.messageMapping.get(replyToMsgId);
       const replyMappingKey = this.getMappingKey(
         channelConfig.targetChannelId,
         channelConfig.targetTopicId
       );
       targetReplyToMsgId = channelMap?.get(replyMappingKey);
+
+      if (targetReplyToMsgId) {
+        this.logger.log(`✅ Found target reply message: ${targetReplyToMsgId}`);
+      } else {
+        this.logger.warn(
+          `⚠️ No mapping found for reply to message ${replyToMsgId}`
+        );
+      }
     }
 
     // Replace text if present and get entities
@@ -929,9 +948,13 @@ export class TranslatorService implements OnModuleInit {
 
     // Add reply-to if needed
     if (targetReplyToMsgId) {
+      // This is a reply to a specific message
       sendOptions.replyTo = targetReplyToMsgId;
+      this.logger.log(`📤 Sending as reply to message ${targetReplyToMsgId}`);
     } else if (channelConfig.targetTopicId) {
+      // Just posting to the topic root
       sendOptions.replyTo = channelConfig.targetTopicId;
+      this.logger.log(`📤 Sending to topic ${channelConfig.targetTopicId}`);
     }
 
     // Preserve message entities (links, mentions, etc.)
@@ -971,6 +994,9 @@ export class TranslatorService implements OnModuleInit {
         channelConfig.targetTopicId
       );
       this.messageMapping.get(sourceMessageId)!.set(mappingKey, sentMessage.id);
+      this.logger.log(
+        `💾 Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id} (key: ${mappingKey})`
+      );
     }
   }
 
