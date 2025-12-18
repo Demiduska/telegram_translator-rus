@@ -87,13 +87,29 @@ export class MessageSenderService {
     }
 
     // Extract button links and append them to message text
-    const buttonLinks = this.buttonProcessor.extractButtonLinks(message);
-    if (buttonLinks.length > 0) {
-      this.logger.log(`🔗 Converted ${buttonLinks.length} button(s) to links`);
+    // Special case for channel -1003540006367: don't convert buttons, just add custom text
+    if (channelConfig.targetChannelId === -1003540006367) {
+      const customLines = [
+        "@cheapmirror — самый дешевый миррор всех приваток СНГ",
+        "@freecheapmirrorbot — получить бесплатный доступ ко всем спредам",
+        "@gate — вернуть комиссии на Gate",
+      ];
       processedText = this.textProcessor.appendLinesToMessage(
         processedText,
-        buttonLinks
+        customLines
       );
+      this.logger.log(`📝 Added custom footer for channel -1003540006367`);
+    } else {
+      const buttonLinks = this.buttonProcessor.extractButtonLinks(message);
+      if (buttonLinks.length > 0) {
+        this.logger.log(
+          `🔗 Converted ${buttonLinks.length} button(s) to links`
+        );
+        processedText = this.textProcessor.appendLinesToMessage(
+          processedText,
+          buttonLinks
+        );
+      }
     }
 
     // Prepare send options
@@ -173,18 +189,34 @@ export class MessageSenderService {
     }
 
     // Extract button links from any message in the group that has them
-    const messageWithButtons = messages.find((msg) => msg.replyMarkup);
-    if (messageWithButtons) {
-      const buttonLinks =
-        this.buttonProcessor.extractButtonLinks(messageWithButtons);
-      if (buttonLinks.length > 0) {
-        this.logger.log(
-          `🔗 Converted ${buttonLinks.length} button(s) to links in grouped message`
-        );
-        processedText = this.textProcessor.appendLinesToMessage(
-          processedText,
-          buttonLinks
-        );
+    // Special case for channel -1003540006367: don't convert buttons, just add custom text
+    if (channelConfig.targetChannelId === -1003540006367) {
+      const customLines = [
+        "@cheapmirror — самый дешевый миррор всех приваток СНГ",
+        "@freecheapmirrorbot — получить бесплатный доступ ко всем спредам",
+        "@gate — вернуть комиссии на Gate",
+      ];
+      processedText = this.textProcessor.appendLinesToMessage(
+        processedText,
+        customLines
+      );
+      this.logger.log(
+        `📝 Added custom footer for channel -1003540006367 in grouped message`
+      );
+    } else {
+      const messageWithButtons = messages.find((msg) => msg.replyMarkup);
+      if (messageWithButtons) {
+        const buttonLinks =
+          this.buttonProcessor.extractButtonLinks(messageWithButtons);
+        if (buttonLinks.length > 0) {
+          this.logger.log(
+            `🔗 Converted ${buttonLinks.length} button(s) to links in grouped message`
+          );
+          processedText = this.textProcessor.appendLinesToMessage(
+            processedText,
+            buttonLinks
+          );
+        }
       }
     }
 
