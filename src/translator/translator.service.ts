@@ -256,11 +256,15 @@ export class TranslatorService implements OnModuleInit {
       const groupedId = (message as any).groupedId?.toString();
 
       // Get the source topic ID from the message (if it's posted to a topic)
-      // In Telegram forums, messages in topics have replyTo.replyToTopicId pointing to the topic's root message ID
-      // replyTo.replyToMsgId can be different if it's a reply to a specific message
+      // In Telegram forums, the replyTo object has different structures:
+      // - replyToTopId: The topic root ID (even for replies within topic)
+      // - replyToMsgId: The message ID (topic root for regular posts, specific message for replies)
+      // We need to check replyToTopId first, then fall back to replyToMsgId
+      const replyToObject = (message as any).replyTo;
       const messageTopicId =
-        (message as any).replyTo?.replyToTopicId ||
-        (message as any).replyTo?.replyToMsgId;
+        replyToObject?.replyToTopId ||
+        replyToObject?.replyToTopicId ||
+        replyToObject?.replyToMsgId;
 
       // Filter configs based on source topic ID
       const applicableConfigs = channelConfigs.filter((config) => {
