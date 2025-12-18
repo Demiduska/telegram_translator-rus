@@ -883,10 +883,13 @@ export class TranslatorService implements OnModuleInit {
     const replyToMsgId = message.replyTo?.replyToMsgId;
     const replyToTopicId = message.replyTo?.replyToTopicId;
 
-    // Debug logging for reply structure
+    // Debug logging for reply structure - dump ALL fields
     if (message.replyTo) {
       this.logger.log(
         `🔍 Reply structure - replyToMsgId: ${replyToMsgId}, replyToTopicId: ${replyToTopicId}`
+      );
+      this.logger.log(
+        `🔍 Full replyTo object: ${JSON.stringify(message.replyTo, null, 2)}`
       );
     }
 
