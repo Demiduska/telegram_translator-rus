@@ -902,13 +902,22 @@ export class TranslatorService implements OnModuleInit {
     }
 
     // Check if this is a reply to another message (not just to the topic root)
-    // In forum topics: replyToTopicId = topic root, replyToMsgId = actual message being replied to
+    // In forum topics, there are two cases:
+    // 1. replyToTopicId is set: it's the topic root, replyToMsgId is the actual message being replied to
+    // 2. replyToTopicId is undefined: replyToMsgId might be the topic ID OR an actual message
+    // We need to check if replyToMsgId matches the source topic ID from config
     let targetReplyToMsgId: number | undefined;
+    const isReplyToTopic =
+      replyToMsgId &&
+      channelConfig.sourceTopicId !== undefined &&
+      replyToMsgId === channelConfig.sourceTopicId;
     const isActualReply =
-      replyToMsgId && (!replyToTopicId || replyToMsgId !== replyToTopicId);
+      replyToMsgId &&
+      !isReplyToTopic &&
+      (!replyToTopicId || replyToMsgId !== replyToTopicId);
 
     this.logger.log(
-      `🔍 Reply detection - isActualReply: ${isActualReply}, replyToMsgId: ${replyToMsgId}, replyToTopicId: ${replyToTopicId}`
+      `🔍 Reply detection - isActualReply: ${isActualReply}, isReplyToTopic: ${isReplyToTopic}, replyToMsgId: ${replyToMsgId}, replyToTopicId: ${replyToTopicId}, sourceTopicId: ${channelConfig.sourceTopicId}`
     );
 
     if (isActualReply) {
