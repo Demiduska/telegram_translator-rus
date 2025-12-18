@@ -1,17 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { TelegramService } from "../telegram/telegram.service";
 import { NewMessageEvent } from "telegram/events";
-import { Api } from "telegram/tl";
 import { ChannelConfig, ChannelConfigParserService } from "./config";
-
-interface QueuedMessage {
-  type: "single" | "grouped";
-  message?: any;
-  messages?: any[];
-  groupedId?: string;
-  channelConfig: ChannelConfig;
-  retryCount?: number;
-}
+import { QueuedMessage, MessageQueueService } from "./queue";
+import { MessageMappingService } from "./mapping";
+import { MessageSenderService } from "./senders";
+import { TextProcessorService } from "./processors";
+import { GROUPED_MESSAGE_TIMEOUT_MS } from "../common/constants/telegram.constants";
 
 @Injectable()
 export class TranslatorService implements OnModuleInit {
@@ -21,15 +16,6 @@ export class TranslatorService implements OnModuleInit {
     string,
     { messages: any[]; timeout: NodeJS.Timeout; channelConfig: ChannelConfig }
   > = new Map();
-  // Map to store source message ID -> (target channel ID + target topic ID -> target message ID)
-  // Key format: "channelId:topicId" or "channelId" if no topic
-  private messageMapping: Map<number, Map<string, number>> = new Map();
-
-  // Message queue and rate limiting
-  private messageQueue: QueuedMessage[] = [];
-  private isProcessingQueue: boolean = false;
-  private readonly MESSAGE_DELAY_MS: number;
-  private readonly MAX_RETRY_ATTEMPTS = 3;
 
   // Legacy mode support
   private sourceChannelId: number;
@@ -39,86 +25,13 @@ export class TranslatorService implements OnModuleInit {
 
   constructor(
     private readonly telegramService: TelegramService,
-    private readonly configParser: ChannelConfigParserService
+    private readonly configParser: ChannelConfigParserService,
+    private readonly queueService: MessageQueueService,
+    private readonly mappingService: MessageMappingService,
+    private readonly senderService: MessageSenderService,
+    private readonly textProcessor: TextProcessorService
   ) {
     this.parseChannelConfiguration();
-    // Get message delay from env or use default (2 seconds)
-    this.MESSAGE_DELAY_MS = parseInt(
-      process.env.MESSAGE_DELAY_MS || "2000",
-      10
-    );
-    this.logger.log(`Message delay set to ${this.MESSAGE_DELAY_MS}ms`);
-  }
-
-  /**
-   * Generate a unique key for message mapping
-   * Format: "channelId:topicId" or "channelId" if no topic
-   */
-  private getMappingKey(channelId: number, topicId?: number): string {
-    return topicId ? `${channelId}:${topicId}` : `${channelId}`;
-  }
-
-  /**
-   * Extract links from inline buttons in reply markup
-   */
-  private extractButtonLinks(message: any): string[] {
-    if (!message.replyMarkup?.rows) return [];
-
-    const links: string[] = [];
-
-    for (const row of message.replyMarkup.rows) {
-      for (const button of row.buttons) {
-        if (
-          button.className === "KeyboardButtonUrl" &&
-          button.text &&
-          button.url
-        ) {
-          links.push(`${button.text} → ${button.url}`);
-        }
-      }
-    }
-
-    return links;
-  }
-
-  /**
-   * Append button links to message text
-   */
-  private appendLinksToMessage(originalText: string, links: string[]): string {
-    if (links.length === 0) return originalText;
-
-    return originalText + "\n\n" + links.join("\n");
-  }
-
-  /**
-   * Simple text replacement function
-   * Replaces @pass1fybot with @cheapmirror
-   */
-  private replaceText(text: string): string {
-    if (!text) return text;
-    return text.replace(/@pass1fybot/gi, "@cheapmirror");
-  }
-
-  /**
-   * Adjust message entities after text replacement
-   * Updates entity offsets and lengths if text was modified
-   */
-  private adjustEntities(
-    originalText: string,
-    newText: string,
-    entities: any[]
-  ): any[] {
-    if (!entities || entities.length === 0) return entities;
-
-    // If text length didn't change, entities should be fine as-is
-    if (originalText.length === newText.length) {
-      return entities;
-    }
-
-    // For more complex replacements, we'd need to track each replacement
-    // For now, we'll just return the entities as-is since our replacement
-    // (@pass1fybot -> @cheapmirror) maintains the same length
-    return entities;
   }
 
   private parseChannelConfiguration() {
@@ -168,7 +81,6 @@ export class TranslatorService implements OnModuleInit {
       const targetEntity: any = await this.telegramService.getEntity(targetUrl);
 
       // Extract the actual ID from the entity
-      // The entity object structure may vary, so we handle different cases
       this.sourceChannelId = sourceEntity.id?.value
         ? Number(sourceEntity.id.value)
         : Number(sourceEntity.id);
@@ -255,11 +167,7 @@ export class TranslatorService implements OnModuleInit {
       const message = event.message;
       const groupedId = (message as any).groupedId?.toString();
 
-      // Get the source topic ID from the message (if it's posted to a topic)
-      // In Telegram forums, the replyTo object has different structures:
-      // - replyToTopId: The topic root ID (even for replies within topic)
-      // - replyToMsgId: The message ID (topic root for regular posts, specific message for replies)
-      // We need to check replyToTopId first, then fall back to replyToMsgId
+      // Get the source topic ID from the message
       const replyToObject = (message as any).replyTo;
       const messageTopicId =
         replyToObject?.replyToTopId ||
@@ -268,11 +176,9 @@ export class TranslatorService implements OnModuleInit {
 
       // Filter configs based on source topic ID
       const applicableConfigs = channelConfigs.filter((config) => {
-        // If config has a source topic filter, check if message matches
         if (config.sourceTopicId !== undefined) {
           return messageTopicId === config.sourceTopicId;
         }
-        // If no source topic filter, accept all messages from this channel
         return true;
       });
 
@@ -311,22 +217,22 @@ export class TranslatorService implements OnModuleInit {
             clearTimeout(groupData.timeout);
           }
 
-          // Set a new timeout to process the group after 1 second of no new messages
+          // Set a new timeout to process the group after timeout period
           groupData.timeout = setTimeout(async () => {
-            await this.processGroupedMessagesMulti(
+            await this.processGroupedMessages(
               groupKey,
               groupData.messages,
               channelConfig
             );
             this.groupedMessages.delete(groupKey);
-          }, 1000);
+          }, GROUPED_MESSAGE_TIMEOUT_MS);
 
           this.logger.log(
             `Collected message ${groupData.messages.length} for group ${groupKey}`
           );
         } else {
           // Not part of a group - process immediately
-          await this.processSingleMessageMulti(message, channelConfig);
+          await this.processSingleMessage(message, channelConfig);
         }
       }
     } catch (error) {
@@ -337,21 +243,9 @@ export class TranslatorService implements OnModuleInit {
     }
   }
 
-  private async handleNewMessageMulti(
-    event: NewMessageEvent,
-    channelConfig: ChannelConfig
-  ) {
-    // Legacy method - kept for compatibility
-    await this.handleNewMessageMultiAll(event, [channelConfig]);
-  }
-
   private async handleNewMessage(event: NewMessageEvent) {
     try {
       const message = event.message;
-      const messageText = message.message;
-      const hasMedia = message.media;
-
-      // Check if this message is part of a grouped media (album)
       const groupedId = (message as any).groupedId?.toString();
 
       if (groupedId) {
@@ -372,11 +266,21 @@ export class TranslatorService implements OnModuleInit {
           clearTimeout(groupData.timeout);
         }
 
-        // Set a new timeout to process the group after 1 second of no new messages
+        // Create legacy channel config
+        const legacyChannelConfig: ChannelConfig = {
+          sourceId: this.sourceChannelId,
+          targetChannelId: this.targetChannelId,
+        };
+
+        // Set a new timeout to process the group
         groupData.timeout = setTimeout(async () => {
-          await this.processGroupedMessages(groupedId, groupData.messages);
+          await this.processGroupedMessages(
+            groupedId,
+            groupData.messages,
+            legacyChannelConfig
+          );
           this.groupedMessages.delete(groupedId);
-        }, 1000);
+        }, GROUPED_MESSAGE_TIMEOUT_MS);
 
         this.logger.log(
           `Collected message ${groupData.messages.length} for group ${groupedId}`
@@ -385,7 +289,11 @@ export class TranslatorService implements OnModuleInit {
       }
 
       // Not part of a group - process immediately
-      await this.processSingleMessage(message);
+      const legacyChannelConfig: ChannelConfig = {
+        sourceId: this.sourceChannelId,
+        targetChannelId: this.targetChannelId,
+      };
+      await this.processSingleMessage(message, legacyChannelConfig);
     } catch (error) {
       this.logger.error(
         `Error processing message: ${error.message}`,
@@ -394,14 +302,14 @@ export class TranslatorService implements OnModuleInit {
     }
   }
 
-  private async processGroupedMessagesMulti(
+  private async processGroupedMessages(
     groupedId: string,
     messages: any[],
     channelConfig: ChannelConfig
   ) {
     try {
       this.logger.log(
-        `Processing grouped messages (${messages.length} items) for group ${groupedId} from channel ${channelConfig.sourceId}`
+        `Processing grouped messages (${messages.length} items) for group ${groupedId}`
       );
 
       // Add grouped message to queue for rate-limited processing
@@ -419,34 +327,7 @@ export class TranslatorService implements OnModuleInit {
     }
   }
 
-  private async processGroupedMessages(groupedId: string, messages: any[]) {
-    try {
-      this.logger.log(
-        `Processing grouped messages (${messages.length} items) for group ${groupedId}`
-      );
-
-      // Add grouped message to queue for rate-limited processing
-      // For legacy mode, we need to create a channel config
-      const legacyChannelConfig: ChannelConfig = {
-        sourceId: this.sourceChannelId,
-        targetChannelId: this.targetChannelId,
-      };
-
-      this.addToQueue({
-        type: "grouped",
-        messages: messages,
-        groupedId: groupedId,
-        channelConfig: legacyChannelConfig,
-      });
-    } catch (error) {
-      this.logger.error(
-        `Error processing grouped messages: ${error.message}`,
-        error.stack
-      );
-    }
-  }
-
-  private async processSingleMessageMulti(
+  private async processSingleMessage(
     message: any,
     channelConfig: ChannelConfig
   ) {
@@ -505,126 +386,6 @@ export class TranslatorService implements OnModuleInit {
     }
   }
 
-  private async processSingleMessage(message: any) {
-    try {
-      const messageText = message.message;
-      const hasMedia = message.media;
-      const isPhoto = hasMedia && (message.media as any).photo !== undefined;
-      const sourceMessageId = message.id;
-      const replyToMsgId = message.replyTo?.replyToMsgId;
-
-      // Log message info
-      if (hasMedia) {
-        this.logger.log(
-          `New message with ${isPhoto ? "photo" : "media"} received. Text: ${
-            messageText ? messageText.substring(0, 50) : "(no text)"
-          }...`
-        );
-      } else if (messageText) {
-        this.logger.log(
-          `New message received: ${messageText.substring(0, 100)}...`
-        );
-      } else {
-        this.logger.log("Received message without text or media, skipping...");
-        return;
-      }
-
-      // Check if this is a reply to another message
-      let targetReplyToMsgId: number | undefined;
-      if (replyToMsgId) {
-        const channelMap = this.messageMapping.get(replyToMsgId);
-        const mappingKey = this.getMappingKey(this.targetChannelId);
-        targetReplyToMsgId = channelMap?.get(mappingKey);
-        if (targetReplyToMsgId) {
-          this.logger.log(
-            `This is a reply to message ${replyToMsgId}, will reply to target message ${targetReplyToMsgId}`
-          );
-        } else {
-          this.logger.warn(
-            `This is a reply to message ${replyToMsgId}, but no mapping found in target channel`
-          );
-        }
-      }
-
-      // Replace text if present and get entities
-      let processedText = "";
-      const messageEntities = message.entities || [];
-      let adjustedEntities = messageEntities;
-
-      if (messageText) {
-        processedText = this.replaceText(messageText);
-        adjustedEntities = this.adjustEntities(
-          messageText,
-          processedText,
-          messageEntities
-        );
-        this.logger.log(
-          "Text processed (replaced @pass1fybot with @cheapmirror)"
-        );
-      }
-
-      let sentMessage: any;
-
-      // Prepare send options
-      const sendOptions: any = {
-        message: processedText,
-      };
-
-      // Add reply-to if needed
-      if (targetReplyToMsgId) {
-        sendOptions.replyTo = targetReplyToMsgId;
-      }
-
-      // Preserve message entities (links, mentions, etc.)
-      if (adjustedEntities && adjustedEntities.length > 0) {
-        sendOptions.formattingEntities = adjustedEntities;
-      }
-
-      // Preserve inline keyboard buttons (reply markup)
-      if (message.replyMarkup) {
-        sendOptions.buttons = message.replyMarkup;
-        this.logger.log(
-          "Including inline keyboard buttons from original message"
-        );
-      }
-
-      // If message contains media
-      if (hasMedia) {
-        sendOptions.file = message.media;
-
-        sentMessage = await this.telegramService
-          .getClient()
-          .sendMessage(this.targetChannelId, sendOptions);
-        this.logger.log("Message with media posted successfully");
-      } else {
-        // Text-only message
-        sentMessage = await this.telegramService
-          .getClient()
-          .sendMessage(this.targetChannelId, sendOptions);
-        this.logger.log("Message posted successfully");
-      }
-
-      // Store the message ID mapping per channel
-      if (sentMessage && sentMessage.id) {
-        if (!this.messageMapping.has(sourceMessageId)) {
-          this.messageMapping.set(sourceMessageId, new Map());
-        }
-        const mappingKey = this.getMappingKey(this.targetChannelId);
-        this.messageMapping
-          .get(sourceMessageId)!
-          .set(mappingKey, sentMessage.id);
-        this.logger.log(
-          `Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id}`
-        );
-      }
-    } catch (error) {
-      this.logger.error(
-        `Error processing single message: ${error.message}`,
-        error.stack
-      );
-    }
-  }
-
   private async handleEditedMessageMultiAll(
     event: any,
     channelConfigs: ChannelConfig[]
@@ -638,16 +399,15 @@ export class TranslatorService implements OnModuleInit {
         `Message ${sourceMessageId} was edited, processing ${channelConfigs.length} target configurations`
       );
 
-      // Get the source topic ID from the message to match the exact config
+      // Get the source topic ID from the message
       const messageTopicId = (message as any).replyTo?.replyToMsgId;
 
       // Keep track of edited messages to avoid duplicates
       const editedTargets = new Set<string>();
 
-      // Process edit for each channel config that has this message
+      // Process edit for each channel config
       for (const channelConfig of channelConfigs) {
         // Match the config that was used to send this message originally
-        // If the config has a source topic filter, check if it matches
         if (
           channelConfig.sourceTopicId !== undefined &&
           messageTopicId !== channelConfig.sourceTopicId
@@ -655,26 +415,25 @@ export class TranslatorService implements OnModuleInit {
           continue;
         }
 
-        // Check if we have a mapping for this message in this specific channel+topic combination
-        const channelMap = this.messageMapping.get(sourceMessageId);
-        const mappingKey = this.getMappingKey(
+        // Check if we have a mapping for this message
+        const targetMessageId = this.mappingService.getMapping(
+          sourceMessageId,
           channelConfig.targetChannelId,
           channelConfig.targetTopicId
         );
-        const targetMessageId = channelMap?.get(mappingKey);
 
         if (!targetMessageId) {
           this.logger.debug(
-            `No mapping found for edited message ${sourceMessageId} with key ${mappingKey}, skipping`
+            `No mapping found for edited message ${sourceMessageId}, skipping`
           );
           continue;
         }
 
-        // Check if we already edited this target message (prevent duplicates)
+        // Check if we already edited this target message
         const targetKey = `${channelConfig.targetChannelId}:${targetMessageId}`;
         if (editedTargets.has(targetKey)) {
           this.logger.debug(
-            `Already edited message ${targetMessageId} in channel ${channelConfig.targetChannelId}, skipping duplicate`
+            `Already edited message ${targetMessageId}, skipping duplicate`
           );
           continue;
         }
@@ -683,7 +442,7 @@ export class TranslatorService implements OnModuleInit {
         // Replace the new text
         let processedText = "";
         if (messageText) {
-          processedText = this.replaceText(messageText);
+          processedText = this.textProcessor.replaceText(messageText);
         }
 
         // Edit the message in the target channel
@@ -711,14 +470,6 @@ export class TranslatorService implements OnModuleInit {
     }
   }
 
-  private async handleEditedMessageMulti(
-    event: any,
-    channelConfig: ChannelConfig
-  ) {
-    // Legacy method - kept for compatibility
-    await this.handleEditedMessageMultiAll(event, [channelConfig]);
-  }
-
   private async handleEditedMessage(event: any) {
     try {
       const message = event.message;
@@ -727,10 +478,11 @@ export class TranslatorService implements OnModuleInit {
 
       this.logger.log(`Message ${sourceMessageId} was edited`);
 
-      // Check if we have a mapping for this message in the target channel
-      const channelMap = this.messageMapping.get(sourceMessageId);
-      const mappingKey = this.getMappingKey(this.targetChannelId);
-      const targetMessageId = channelMap?.get(mappingKey);
+      // Check if we have a mapping for this message
+      const targetMessageId = this.mappingService.getMapping(
+        sourceMessageId,
+        this.targetChannelId
+      );
 
       if (!targetMessageId) {
         this.logger.warn(
@@ -742,7 +494,7 @@ export class TranslatorService implements OnModuleInit {
       // Replace the new text
       let processedText = "";
       if (messageText) {
-        processedText = this.replaceText(messageText);
+        processedText = this.textProcessor.replaceText(messageText);
         this.logger.log("Edited text processed");
       }
 
@@ -768,13 +520,10 @@ export class TranslatorService implements OnModuleInit {
    * Add message to the queue for rate-limited processing
    */
   private addToQueue(queuedMessage: QueuedMessage) {
-    this.messageQueue.push(queuedMessage);
-    this.logger.log(
-      `Message added to queue. Queue size: ${this.messageQueue.length}`
-    );
+    this.queueService.addToQueue(queuedMessage);
 
     // Start processing queue if not already running
-    if (!this.isProcessingQueue) {
+    if (!this.queueService.isProcessing()) {
       this.processQueue();
     }
   }
@@ -783,317 +532,19 @@ export class TranslatorService implements OnModuleInit {
    * Process messages from the queue with rate limiting
    */
   private async processQueue() {
-    if (this.isProcessingQueue) {
-      return;
-    }
-
-    this.isProcessingQueue = true;
-    this.logger.log("Started processing message queue");
-
-    while (this.messageQueue.length > 0) {
-      const queuedMessage = this.messageQueue.shift()!;
-
-      try {
-        if (queuedMessage.type === "single") {
-          await this.sendSingleMessage(queuedMessage);
-        } else {
-          await this.sendGroupedMessage(queuedMessage);
-        }
-
-        // Wait before processing next message
-        if (this.messageQueue.length > 0) {
-          this.logger.log(
-            `Waiting ${this.MESSAGE_DELAY_MS}ms before next message...`
-          );
-          await this.sleep(this.MESSAGE_DELAY_MS);
-        }
-      } catch (error) {
-        await this.handleSendError(error, queuedMessage);
-      }
-    }
-
-    this.isProcessingQueue = false;
-    this.logger.log("Finished processing message queue");
-  }
-
-  /**
-   * Handle errors when sending messages, including FloodWaitError
-   */
-  private async handleSendError(error: any, queuedMessage: QueuedMessage) {
-    const isFloodWait = this.isFloodWaitError(error);
-
-    if (isFloodWait) {
-      const waitSeconds = this.extractWaitTime(error);
-      this.logger.warn(
-        `FloodWaitError: Need to wait ${waitSeconds} seconds. Adding message back to queue.`
-      );
-
-      // Increment retry count
-      queuedMessage.retryCount = (queuedMessage.retryCount || 0) + 1;
-
-      if (queuedMessage.retryCount <= this.MAX_RETRY_ATTEMPTS) {
-        // Add back to the front of the queue
-        this.messageQueue.unshift(queuedMessage);
-
-        // Wait for the specified time
-        this.logger.log(`Waiting ${waitSeconds} seconds before retry...`);
-        await this.sleep(waitSeconds * 1000);
-      } else {
-        this.logger.error(
-          `Message exceeded max retry attempts (${this.MAX_RETRY_ATTEMPTS}). Dropping message.`
-        );
-      }
-    } else {
-      this.logger.error(`Error sending message: ${error.message}`, error.stack);
-    }
-  }
-
-  /**
-   * Check if error is a FloodWaitError
-   */
-  private isFloodWaitError(error: any): boolean {
-    return (
-      error.constructor.name === "FloodWaitError" ||
-      error.message?.includes("A wait of") ||
-      error.message?.includes("seconds is required")
-    );
-  }
-
-  /**
-   * Extract wait time from FloodWaitError message
-   */
-  private extractWaitTime(error: any): number {
-    const match = error.message?.match(/wait of (\d+) seconds/);
-    return match ? parseInt(match[1], 10) : 60; // Default to 60 seconds if can't parse
-  }
-
-  /**
-   * Sleep utility
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Send a single message from the queue
-   */
-  private async sendSingleMessage(queuedMessage: QueuedMessage) {
-    const message = queuedMessage.message!;
-    const channelConfig = queuedMessage.channelConfig;
-    const messageText = message.message;
-    const hasMedia = message.media;
-    const isPhoto = hasMedia && (message.media as any).photo !== undefined;
-    const sourceMessageId = message.id;
-    const replyToMsgId = message.replyTo?.replyToMsgId;
-    const replyToTopicId = message.replyTo?.replyToTopicId;
-
-    // Log message info
-    if (hasMedia) {
-      this.logger.log(
-        `Sending message with ${isPhoto ? "photo" : "media"} from queue...`
-      );
-    } else if (messageText) {
-      this.logger.log(
-        `Sending text message from queue: ${messageText.substring(0, 50)}...`
-      );
-    }
-
-    // Check if this is a reply to another message (not just to the topic root)
-    let targetReplyToMsgId: number | undefined;
-    const isReplyToTopic =
-      replyToMsgId &&
-      channelConfig.sourceTopicId !== undefined &&
-      replyToMsgId === channelConfig.sourceTopicId;
-    const isActualReply =
-      replyToMsgId &&
-      !isReplyToTopic &&
-      (!replyToTopicId || replyToMsgId !== replyToTopicId);
-
-    if (isActualReply) {
-      const channelMap = this.messageMapping.get(replyToMsgId);
-      const replyMappingKey = this.getMappingKey(
-        channelConfig.targetChannelId,
-        channelConfig.targetTopicId
-      );
-      targetReplyToMsgId = channelMap?.get(replyMappingKey);
-
-      if (targetReplyToMsgId) {
-        this.logger.log(
-          `↩️ Replying to message ${replyToMsgId} -> target ${targetReplyToMsgId}`
+    await this.queueService.startProcessing(async (queuedMessage) => {
+      if (queuedMessage.type === "single") {
+        await this.senderService.sendSingleMessage(
+          queuedMessage.message!,
+          queuedMessage.channelConfig
         );
       } else {
-        this.logger.warn(
-          `⚠️ Reply to message ${replyToMsgId} not found in mappings`
+        await this.senderService.sendGroupedMessage(
+          queuedMessage.messages!,
+          queuedMessage.channelConfig,
+          queuedMessage.groupedId!
         );
       }
-    }
-
-    // Replace text if present and get entities
-    let processedText = "";
-    const messageEntities = message.entities || [];
-    let adjustedEntities = messageEntities;
-
-    if (messageText) {
-      processedText = this.replaceText(messageText);
-      adjustedEntities = this.adjustEntities(
-        messageText,
-        processedText,
-        messageEntities
-      );
-    }
-
-    // Extract button links and append them to message text
-    const buttonLinks = this.extractButtonLinks(message);
-    if (buttonLinks.length > 0) {
-      this.logger.log(`🔗 Converted ${buttonLinks.length} button(s) to links`);
-      processedText = this.appendLinksToMessage(processedText, buttonLinks);
-    }
-
-    // Prepare send options
-    const sendOptions: any = {
-      message: processedText,
-    };
-
-    // Add reply-to if needed
-    if (targetReplyToMsgId) {
-      sendOptions.replyTo = targetReplyToMsgId;
-    } else if (channelConfig.targetTopicId) {
-      sendOptions.replyTo = channelConfig.targetTopicId;
-    }
-
-    // Preserve message entities (links, mentions, etc.)
-    if (adjustedEntities && adjustedEntities.length > 0) {
-      sendOptions.formattingEntities = adjustedEntities;
-    }
-
-    // Don't include reply markup (buttons) since we converted them to text links
-    // Telegram blocks buttons in resent messages anyway
-
-    // If message contains media
-    if (hasMedia) {
-      sendOptions.file = message.media;
-    }
-
-    const sentMessage = await this.telegramService
-      .getClient()
-      .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-    if (channelConfig.targetTopicId) {
-      this.logger.log(
-        `✅ Message sent to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-      );
-    } else {
-      this.logger.log(
-        `✅ Message sent to channel ${channelConfig.targetChannelId}`
-      );
-    }
-
-    // Store the message ID mapping per channel+topic
-    if (sentMessage && sentMessage.id) {
-      if (!this.messageMapping.has(sourceMessageId)) {
-        this.messageMapping.set(sourceMessageId, new Map());
-      }
-      const mappingKey = this.getMappingKey(
-        channelConfig.targetChannelId,
-        channelConfig.targetTopicId
-      );
-      this.messageMapping.get(sourceMessageId)!.set(mappingKey, sentMessage.id);
-      this.logger.log(
-        `💾 Stored mapping: source ${sourceMessageId} -> target ${sentMessage.id} (key: ${mappingKey})`
-      );
-    }
-  }
-
-  /**
-   * Send a grouped message (album) from the queue
-   */
-  private async sendGroupedMessage(queuedMessage: QueuedMessage) {
-    const messages = queuedMessage.messages!;
-    const channelConfig = queuedMessage.channelConfig;
-    const groupedId = queuedMessage.groupedId;
-
-    this.logger.log(
-      `Sending grouped message (${messages.length} items) from queue...`
-    );
-
-    // Get the text from the first message that has text
-    const messageWithText = messages.find((msg) => msg.message);
-    const messageText = messageWithText?.message || "";
-    const messageEntities = messageWithText?.entities || [];
-
-    // Replace text if present
-    let processedText = "";
-    let adjustedEntities = messageEntities;
-    if (messageText) {
-      processedText = this.replaceText(messageText);
-      adjustedEntities = this.adjustEntities(
-        messageText,
-        processedText,
-        messageEntities
-      );
-    }
-
-    // Extract button links from any message in the group that has them
-    const messageWithButtons = messages.find((msg) => msg.replyMarkup);
-    if (messageWithButtons) {
-      const buttonLinks = this.extractButtonLinks(messageWithButtons);
-      if (buttonLinks.length > 0) {
-        this.logger.log(
-          `🔗 Converted ${buttonLinks.length} button(s) to links in grouped message`
-        );
-        processedText = this.appendLinksToMessage(processedText, buttonLinks);
-      }
-    }
-
-    // Collect all media from the messages
-    const mediaFiles = messages
-      .filter((msg) => msg.media)
-      .map((msg) => msg.media);
-
-    const sendOptions: any = {
-      message: processedText || "",
-    };
-
-    if (channelConfig.targetTopicId) {
-      sendOptions.replyTo = channelConfig.targetTopicId;
-    }
-
-    if (adjustedEntities && adjustedEntities.length > 0) {
-      sendOptions.formattingEntities = adjustedEntities;
-    }
-
-    // Don't include reply markup (buttons) since we converted them to text links
-    // Telegram blocks buttons in resent messages anyway
-
-    if (mediaFiles.length > 0) {
-      sendOptions.file = mediaFiles;
-      await this.telegramService
-        .getClient()
-        .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-      if (channelConfig.targetTopicId) {
-        this.logger.log(
-          `✅ Album with ${mediaFiles.length} items sent to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-        );
-      } else {
-        this.logger.log(
-          `✅ Album with ${mediaFiles.length} items sent to channel ${channelConfig.targetChannelId}`
-        );
-      }
-    } else {
-      await this.telegramService
-        .getClient()
-        .sendMessage(channelConfig.targetChannelId, sendOptions);
-
-      if (channelConfig.targetTopicId) {
-        this.logger.log(
-          `✅ Message sent to channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
-        );
-      } else {
-        this.logger.log(
-          `✅ Message sent to channel ${channelConfig.targetChannelId}`
-        );
-      }
-    }
+    });
   }
 }
