@@ -94,10 +94,31 @@ export class MessageSenderService {
         "@freecheapmirrorbot — получить бесплатный доступ ко всем спредам",
         "@gate — вернуть комиссии на Gate",
       ];
+
+      // Calculate the offset for the @gate link
+      const textBeforeCustom = processedText;
+      const offsetBeforeCustom =
+        textBeforeCustom.length + (textBeforeCustom ? 2 : 0); // +2 for \n\n
+      const line1Length = customLines[0].length;
+      const line2Length = customLines[1].length;
+      const gateOffset = offsetBeforeCustom + line1Length + 1 + line2Length + 1; // +1 for each \n
+
       processedText = this.textProcessor.appendLinesToMessage(
         processedText,
         customLines
       );
+
+      // Add text link entity for @gate
+      if (!adjustedEntities) {
+        adjustedEntities = [];
+      }
+      adjustedEntities.push({
+        _: "MessageEntityTextUrl",
+        offset: gateOffset,
+        length: 5, // "@gate" is 5 characters
+        url: "https://www.gate.com/ru/signup?ref_type=103&ref=VVKWUGWKCQ",
+      });
+
       this.logger.log(`📝 Added custom footer for channel -1003540006367`);
     } else {
       const buttonLinks = this.buttonProcessor.extractButtonLinks(message);
@@ -196,10 +217,31 @@ export class MessageSenderService {
         "@freecheapmirrorbot — получить бесплатный доступ ко всем спредам",
         "@gate — вернуть комиссии на Gate",
       ];
+
+      // Calculate the offset for the @gate link
+      const textBeforeCustom = processedText;
+      const offsetBeforeCustom =
+        textBeforeCustom.length + (textBeforeCustom ? 2 : 0); // +2 for \n\n
+      const line1Length = customLines[0].length;
+      const line2Length = customLines[1].length;
+      const gateOffset = offsetBeforeCustom + line1Length + 1 + line2Length + 1; // +1 for each \n
+
       processedText = this.textProcessor.appendLinesToMessage(
         processedText,
         customLines
       );
+
+      // Add text link entity for @gate
+      if (!adjustedEntities) {
+        adjustedEntities = [];
+      }
+      adjustedEntities.push({
+        _: "MessageEntityTextUrl",
+        offset: gateOffset,
+        length: 5, // "@gate" is 5 characters
+        url: "https://www.gate.com/ru/signup?ref_type=103&ref=VVKWUGWKCQ",
+      });
+
       this.logger.log(
         `📝 Added custom footer for channel -1003540006367 in grouped message`
       );
