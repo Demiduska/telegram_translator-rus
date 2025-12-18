@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { Api } from "telegram/tl";
 import { TelegramService } from "../../telegram/telegram.service";
 import { ChannelConfig } from "../config";
 import { MessageMappingService } from "../mapping";
@@ -112,12 +113,13 @@ export class MessageSenderService {
       if (!adjustedEntities) {
         adjustedEntities = [];
       }
-      adjustedEntities.push({
-        _: "MessageEntityTextUrl",
-        offset: gateOffset,
-        length: 5, // "@gate" is 5 characters
-        url: "https://www.gate.com/ru/signup?ref_type=103&ref=VVKWUGWKCQ",
-      });
+      adjustedEntities.push(
+        new Api.MessageEntityTextUrl({
+          offset: gateOffset,
+          length: 5, // "@gate" is 5 characters
+          url: "https://www.gate.com/ru/signup?ref_type=103&ref=VVKWUGWKCQ",
+        })
+      );
 
       this.logger.log(`📝 Added custom footer for channel -1003540006367`);
     } else {
@@ -235,12 +237,13 @@ export class MessageSenderService {
       if (!adjustedEntities) {
         adjustedEntities = [];
       }
-      adjustedEntities.push({
-        _: "MessageEntityTextUrl",
-        offset: gateOffset,
-        length: 5, // "@gate" is 5 characters
-        url: "https://www.gate.com/ru/signup?ref_type=103&ref=VVKWUGWKCQ",
-      });
+      adjustedEntities.push(
+        new Api.MessageEntityTextUrl({
+          offset: gateOffset,
+          length: 5, // "@gate" is 5 characters
+          url: "https://www.gate.com/ru/signup?ref_type=103&ref=VVKWUGWKCQ",
+        })
+      );
 
       this.logger.log(
         `📝 Added custom footer for channel -1003540006367 in grouped message`
