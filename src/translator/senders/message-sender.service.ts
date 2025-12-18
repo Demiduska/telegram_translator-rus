@@ -90,6 +90,12 @@ export class MessageSenderService {
     // Extract button links and append them to message text
     // Special case for channel -1003540006367: don't convert buttons, just add custom text
     if (channelConfig.targetChannelId === -1003540006367) {
+      // Remove standalone @cheapmirror mentions to avoid duplication with footer
+      processedText = processedText
+        .split("\n")
+        .filter((line) => line.trim() !== "@cheapmirror")
+        .join("\n");
+
       const customLines = [
         "@cheapmirror — самый дешевый миррор всех приваток СНГ",
         "@freecheapmirrorbot — получить бесплатный доступ ко всем спредам",
@@ -214,6 +220,12 @@ export class MessageSenderService {
     // Extract button links from any message in the group that has them
     // Special case for channel -1003540006367: don't convert buttons, just add custom text
     if (channelConfig.targetChannelId === -1003540006367) {
+      // Remove standalone @cheapmirror mentions to avoid duplication with footer
+      processedText = processedText
+        .split("\n")
+        .filter((line) => line.trim() !== "@cheapmirror")
+        .join("\n");
+
       const customLines = [
         "@cheapmirror — самый дешевый миррор всех приваток СНГ",
         "@freecheapmirrorbot — получить бесплатный доступ ко всем спредам",
