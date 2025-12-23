@@ -3,7 +3,11 @@ import { Api } from "telegram/tl";
 import { TelegramService } from "../../telegram/telegram.service";
 import { ChannelConfig } from "../config";
 import { MessageMappingService } from "../mapping";
-import { TextProcessorService, ButtonProcessorService } from "../processors";
+import {
+  TextProcessorService,
+  ButtonProcessorService,
+  ImageProcessorService,
+} from "../processors";
 
 /**
  * Service responsible for sending messages to Telegram
@@ -16,7 +20,8 @@ export class MessageSenderService {
     private readonly telegramService: TelegramService,
     private readonly messageMappingService: MessageMappingService,
     private readonly textProcessor: TextProcessorService,
-    private readonly buttonProcessor: ButtonProcessorService
+    private readonly buttonProcessor: ButtonProcessorService,
+    private readonly imageProcessor: ImageProcessorService
   ) {}
 
   /**
@@ -158,9 +163,22 @@ export class MessageSenderService {
       sendOptions.formattingEntities = adjustedEntities;
     }
 
-    // If message contains media
+    // If message contains media, process it to remove watermark
     if (hasMedia) {
-      sendOptions.file = message.media;
+      if (this.imageProcessor.shouldProcessMedia(message.media)) {
+        const processedImage = await this.imageProcessor.removeWatermark(
+          message.media
+        );
+        if (processedImage) {
+          sendOptions.file = processedImage;
+          this.logger.log("🖼️ Using processed image (watermark removed)");
+        } else {
+          sendOptions.file = message.media;
+          this.logger.warn("⚠️ Failed to process image, using original");
+        }
+      } else {
+        sendOptions.file = message.media;
+      }
     }
 
     const sentMessage = await this.telegramService
@@ -277,10 +295,30 @@ export class MessageSenderService {
       }
     }
 
-    // Collect all media from the messages
-    const mediaFiles = messages
-      .filter((msg) => msg.media)
-      .map((msg) => msg.media);
+    // Collect all media from the messages and process images to remove watermarks
+    const mediaFiles = await Promise.all(
+      messages
+        .filter((msg) => msg.media)
+        .map(async (msg) => {
+          if (this.imageProcessor.shouldProcessMedia(msg.media)) {
+            const processedImage = await this.imageProcessor.removeWatermark(
+              msg.media
+            );
+            if (processedImage) {
+              this.logger.log(
+                "🖼️ Processed image in album (watermark removed)"
+              );
+              return processedImage;
+            } else {
+              this.logger.warn(
+                "⚠️ Failed to process album image, using original"
+              );
+              return msg.media;
+            }
+          }
+          return msg.media;
+        })
+    );
 
     const sendOptions: any = {
       message: processedText || "",

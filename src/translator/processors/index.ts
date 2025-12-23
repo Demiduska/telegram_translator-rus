@@ -1,2 +1,3 @@
 export * from "./text-processor.service";
 export * from "./button-processor.service";
+export * from "./image-processor.service";

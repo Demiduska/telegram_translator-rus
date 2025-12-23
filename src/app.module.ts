@@ -9,6 +9,7 @@ import { MessageSenderService } from "./translator/senders";
 import {
   TextProcessorService,
   ButtonProcessorService,
+  ImageProcessorService,
 } from "./translator/processors";
 
 @Module({
@@ -23,6 +24,7 @@ import {
     MessageSenderService,
     TextProcessorService,
     ButtonProcessorService,
+    ImageProcessorService,
   ],
 })
 export class AppModule {}
