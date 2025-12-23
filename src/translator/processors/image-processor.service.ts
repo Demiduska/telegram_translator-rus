@@ -47,6 +47,10 @@ export class ImageProcessorService {
         `Original image: ${metadata.width}x${metadata.height}, format: ${metadata.format}`
       );
 
+      // Determine output format based on original format
+      const outputFormat = metadata.format || "jpeg";
+      this.logger.log(`Using output format: ${outputFormat}`);
+
       let processedBuffer: Buffer;
 
       if (this.COVER_METHOD) {
@@ -77,15 +81,29 @@ export class ImageProcessorService {
           </svg>
         `;
 
-        processedBuffer = await image
-          .composite([
-            {
-              input: Buffer.from(coverSvg),
-              blend: "over",
-            },
-          ])
-          .jpeg({ quality: 95 })
-          .toBuffer();
+        // Process and convert based on format
+        let processedImage = image.composite([
+          {
+            input: Buffer.from(coverSvg),
+            blend: "over",
+          },
+        ]);
+
+        // Output in the original format
+        if (outputFormat === "png") {
+          processedBuffer = await processedImage
+            .png({ quality: 95 })
+            .toBuffer();
+        } else if (outputFormat === "webp") {
+          processedBuffer = await processedImage
+            .webp({ quality: 95 })
+            .toBuffer();
+        } else {
+          // Default to JPEG
+          processedBuffer = await processedImage
+            .jpeg({ quality: 95 })
+            .toBuffer();
+        }
 
         this.logger.log(
           `✂️ Covered watermark area (${coverHeight}px from bottom)`
@@ -98,15 +116,22 @@ export class ImageProcessorService {
         ); // Max 15% of image height
         const newHeight = metadata.height - cropHeight;
 
-        processedBuffer = await image
-          .extract({
-            left: 0,
-            top: 0,
-            width: metadata.width,
-            height: newHeight,
-          })
-          .jpeg({ quality: 95 })
-          .toBuffer();
+        let croppedImage = image.extract({
+          left: 0,
+          top: 0,
+          width: metadata.width,
+          height: newHeight,
+        });
+
+        // Output in the original format
+        if (outputFormat === "png") {
+          processedBuffer = await croppedImage.png({ quality: 95 }).toBuffer();
+        } else if (outputFormat === "webp") {
+          processedBuffer = await croppedImage.webp({ quality: 95 }).toBuffer();
+        } else {
+          // Default to JPEG
+          processedBuffer = await croppedImage.jpeg({ quality: 95 }).toBuffer();
+        }
 
         this.logger.log(
           `✂️ Cropped ${cropHeight}px from bottom (new size: ${metadata.width}x${newHeight})`
