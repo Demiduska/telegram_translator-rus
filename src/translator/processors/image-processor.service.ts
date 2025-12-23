@@ -18,9 +18,11 @@ export class ImageProcessorService {
   /**
    * Process an image to remove watermark
    * @param media - Telegram media object
-   * @returns Processed image buffer or null if processing failed
+   * @returns Processed image data with buffer and extension, or null if processing failed
    */
-  async removeWatermark(media: any): Promise<Buffer | null> {
+  async removeWatermark(
+    media: any
+  ): Promise<{ buffer: Buffer; extension: string } | null> {
     try {
       // Download the image from Telegram
       const imageBuffer = await this.telegramService
@@ -138,7 +140,15 @@ export class ImageProcessorService {
         );
       }
 
-      return processedBuffer;
+      // Determine file extension based on format
+      let extension = ".jpg";
+      if (outputFormat === "png") {
+        extension = ".png";
+      } else if (outputFormat === "webp") {
+        extension = ".webp";
+      }
+
+      return { buffer: processedBuffer, extension };
     } catch (error) {
       this.logger.error(
         `Error processing image: ${error.message}`,

@@ -170,8 +170,18 @@ export class MessageSenderService {
           message.media
         );
         if (processedImage) {
-          sendOptions.file = processedImage;
-          this.logger.log("🖼️ Using processed image (watermark removed)");
+          // Create a file-like object with filename for Telegram
+          const timestamp = Date.now();
+          const filename = `photo_${timestamp}${processedImage.extension}`;
+
+          // Create a buffer with filename attribute
+          const fileBuffer = processedImage.buffer as any;
+          fileBuffer.name = filename;
+
+          sendOptions.file = fileBuffer;
+          this.logger.log(
+            `🖼️ Using processed image (watermark removed) - ${filename}`
+          );
         } else {
           sendOptions.file = message.media;
           this.logger.warn("⚠️ Failed to process image, using original");
@@ -299,16 +309,24 @@ export class MessageSenderService {
     const mediaFiles = await Promise.all(
       messages
         .filter((msg) => msg.media)
-        .map(async (msg) => {
+        .map(async (msg, index) => {
           if (this.imageProcessor.shouldProcessMedia(msg.media)) {
             const processedImage = await this.imageProcessor.removeWatermark(
               msg.media
             );
             if (processedImage) {
+              // Create a file-like object with filename for Telegram
+              const timestamp = Date.now();
+              const filename = `photo_${timestamp}_${index}${processedImage.extension}`;
+
+              // Create a buffer with filename attribute
+              const fileBuffer = processedImage.buffer as any;
+              fileBuffer.name = filename;
+
               this.logger.log(
-                "🖼️ Processed image in album (watermark removed)"
+                `🖼️ Processed image in album (watermark removed) - ${filename}`
               );
-              return processedImage;
+              return fileBuffer;
             } else {
               this.logger.warn(
                 "⚠️ Failed to process album image, using original"
