@@ -10,8 +10,8 @@ export class ImageProcessorService {
   private readonly logger = new Logger(ImageProcessorService.name);
 
   // Watermark removal settings
-  private readonly CROP_BOTTOM_PIXELS = 80; // How many pixels to crop from bottom
-  private readonly COVER_METHOD = true; // If true, covers watermark with background color. If false, crops it
+  private readonly CROP_BOTTOM_PIXELS = 70; // How many pixels to crop from bottom
+  private readonly COVER_METHOD = false; // If true, covers watermark with background color. If false, crops it
 
   constructor(private readonly telegramService: TelegramService) {}
 
