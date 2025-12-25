@@ -2,7 +2,6 @@ import { Injectable, Logger } from "@nestjs/common";
 import { QueuedMessage } from "./message-queue.interface";
 import { sleep } from "../../common/utils/sleep.util";
 import {
-  DEFAULT_MESSAGE_DELAY_MS,
   MAX_RETRY_ATTEMPTS,
   DEFAULT_FLOOD_WAIT_SECONDS,
 } from "../../common/constants/telegram.constants";
@@ -19,11 +18,8 @@ export class MessageQueueService {
   private readonly maxRetryAttempts: number;
 
   constructor() {
-    // Get message delay from env or use default
-    this.messageDelayMs = parseInt(
-      process.env.MESSAGE_DELAY_MS || String(DEFAULT_MESSAGE_DELAY_MS),
-      10
-    );
+    // Get message delay from env or use default (2000ms)
+    this.messageDelayMs = parseInt(process.env.MESSAGE_DELAY_MS || "2000", 10);
     this.maxRetryAttempts = MAX_RETRY_ATTEMPTS;
     this.logger.log(`Message delay set to ${this.messageDelayMs}ms`);
   }
