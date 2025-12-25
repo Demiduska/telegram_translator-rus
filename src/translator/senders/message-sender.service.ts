@@ -184,7 +184,9 @@ export class MessageSenderService {
           );
         } else {
           sendOptions.file = message.media;
-          this.logger.warn("⚠️ Failed to process image, using original");
+          this.logger.log(
+            "📸 Using original image (processing disabled or failed)"
+          );
         }
       } else {
         sendOptions.file = message.media;
@@ -328,8 +330,8 @@ export class MessageSenderService {
               );
               return fileBuffer;
             } else {
-              this.logger.warn(
-                "⚠️ Failed to process album image, using original"
+              this.logger.log(
+                "📸 Using original image in album (processing disabled or failed)"
               );
               return msg.media;
             }

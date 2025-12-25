@@ -9,20 +9,40 @@ import { TelegramService } from "../../telegram/telegram.service";
 export class ImageProcessorService {
   private readonly logger = new Logger(ImageProcessorService.name);
 
-  // Watermark removal settings
+  // Image processing settings
+  private readonly ENABLE_IMAGE_PROCESSING: boolean;
   private readonly CROP_BOTTOM_PIXELS = 80; // How many pixels to crop from bottom
   private readonly COVER_METHOD = false; // If true, covers watermark with background color. If false, crops it
 
-  constructor(private readonly telegramService: TelegramService) {}
+  constructor(private readonly telegramService: TelegramService) {
+    // Get image processing setting from env (default: true)
+    this.ENABLE_IMAGE_PROCESSING =
+      process.env.ENABLE_IMAGE_PROCESSING !== "false";
+
+    if (!this.ENABLE_IMAGE_PROCESSING) {
+      this.logger.log(
+        "⚠️ Image processing is DISABLED - images will be forwarded as-is"
+      );
+    } else {
+      this.logger.log(
+        "✅ Image processing is ENABLED - watermarks will be removed"
+      );
+    }
+  }
 
   /**
    * Process an image to remove watermark
    * @param media - Telegram media object
-   * @returns Processed image data with buffer and extension, or null if processing failed
+   * @returns Processed image data with buffer and extension, or null if processing failed/disabled
    */
   async removeWatermark(
     media: any
   ): Promise<{ buffer: Buffer; extension: string } | null> {
+    // Skip processing if disabled
+    if (!this.ENABLE_IMAGE_PROCESSING) {
+      return null;
+    }
+
     try {
       // Download the image from Telegram
       const imageBuffer = await this.telegramService
