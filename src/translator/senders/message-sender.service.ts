@@ -8,6 +8,7 @@ import {
   ButtonProcessorService,
   ImageProcessorService,
 } from "../processors";
+import { WebhookService } from "../webhook";
 
 /**
  * Service responsible for sending messages to Telegram
@@ -21,7 +22,8 @@ export class MessageSenderService {
     private readonly messageMappingService: MessageMappingService,
     private readonly textProcessor: TextProcessorService,
     private readonly buttonProcessor: ButtonProcessorService,
-    private readonly imageProcessor: ImageProcessorService
+    private readonly imageProcessor: ImageProcessorService,
+    private readonly webhookService: WebhookService
   ) {}
 
   /**
@@ -214,6 +216,15 @@ export class MessageSenderService {
         channelConfig.targetChannelId,
         sentMessage.id,
         channelConfig.targetTopicId
+      );
+    }
+
+    // Send webhook notification if configured for this channel
+    if (messageText || processedText) {
+      await this.webhookService.sendWebhook(
+        messageText || processedText,
+        channelConfig.sourceId,
+        channelConfig.sourceTopicId
       );
     }
   }

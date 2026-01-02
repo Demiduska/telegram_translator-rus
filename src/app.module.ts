@@ -11,6 +11,7 @@ import {
   ButtonProcessorService,
   ImageProcessorService,
 } from "./translator/processors";
+import { WebhookService } from "./translator/webhook";
 
 @Module({
   imports: [],
@@ -25,6 +26,7 @@ import {
     TextProcessorService,
     ButtonProcessorService,
     ImageProcessorService,
+    WebhookService,
   ],
 })
 export class AppModule {}
