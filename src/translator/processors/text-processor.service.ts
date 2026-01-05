@@ -13,7 +13,9 @@ export class TextProcessorService {
    */
   replaceText(text: string): string {
     if (!text) return text;
-    return text.replace(/@pass1fybot/gi, "@cheapmirror");
+    return text
+      .replace(/@pass1fybot/gi, "@cheapmirror")
+      .replace("https://t.me/pass1fybot", "@cheapmirror");
   }
 
   /**
