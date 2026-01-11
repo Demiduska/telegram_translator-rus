@@ -15,6 +15,8 @@ export class TextProcessorService {
     if (!text) return text;
     return text
       .replace(/@pass1fybot/gi, "@cheapmirror")
+      .replace(/@shelbymirrorbot/gi, "@cheapmirror")
+      .replace("https://t.me/shelbymirrorbot", "@cheapmirror")
       .replace("https://t.me/pass1fybot", "@cheapmirror");
   }
 
