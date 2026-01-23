@@ -29,7 +29,7 @@ export class TranslatorService implements OnModuleInit {
     private readonly queueService: MessageQueueService,
     private readonly mappingService: MessageMappingService,
     private readonly senderService: MessageSenderService,
-    private readonly textProcessor: TextProcessorService
+    private readonly textProcessor: TextProcessorService,
   ) {
     this.parseChannelConfiguration();
   }
@@ -70,7 +70,7 @@ export class TranslatorService implements OnModuleInit {
 
     if (!sourceUrl || !targetUrl) {
       throw new Error(
-        "Missing channel configuration. Provide either SOURCE_CHANNEL_ID + TARGET_CHANNEL_ID or SOURCE_CHANNEL_URL + TARGET_CHANNEL_URL in .env"
+        "Missing channel configuration. Provide either SOURCE_CHANNEL_ID + TARGET_CHANNEL_ID or SOURCE_CHANNEL_URL + TARGET_CHANNEL_URL in .env",
       );
     }
 
@@ -90,7 +90,7 @@ export class TranslatorService implements OnModuleInit {
         : Number(targetEntity.id);
 
       this.logger.log(
-        `Resolved source channel ID: ${this.sourceChannelId}, target channel ID: ${this.targetChannelId}`
+        `Resolved source channel ID: ${this.sourceChannelId}, target channel ID: ${this.targetChannelId}`,
       );
     } catch (error) {
       this.logger.error("Failed to resolve channel IDs", error.stack);
@@ -100,7 +100,7 @@ export class TranslatorService implements OnModuleInit {
 
   private startWatchingMultiChannel() {
     this.logger.log(
-      `Starting to watch ${this.channels.length} channel configurations...`
+      `Starting to watch ${this.channels.length} channel configurations...`,
     );
 
     // Group channel configs by source ID to avoid duplicate handlers
@@ -114,54 +114,54 @@ export class TranslatorService implements OnModuleInit {
 
       if (channelConfig.targetTopicId) {
         this.logger.log(
-          `📢 Configured: channel ${channelConfig.sourceId} -> channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+          `📢 Configured: channel ${channelConfig.sourceId} -> channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`,
         );
       } else {
         this.logger.log(
-          `📢 Configured: channel ${channelConfig.sourceId} -> channel ${channelConfig.targetChannelId}`
+          `📢 Configured: channel ${channelConfig.sourceId} -> channel ${channelConfig.targetChannelId}`,
         );
       }
     }
 
     // Add one handler per unique source channel
     this.logger.log(
-      `Adding handlers for ${sourceChannelMap.size} unique source channels`
+      `Adding handlers for ${sourceChannelMap.size} unique source channels`,
     );
 
     for (const [sourceId, configs] of sourceChannelMap.entries()) {
       this.telegramService.addNewMessageHandler(sourceId, (event) =>
-        this.handleNewMessageMultiAll(event, configs)
+        this.handleNewMessageMultiAll(event, configs),
       );
 
       this.telegramService.addEditedMessageHandler(sourceId, (event) =>
-        this.handleEditedMessageMultiAll(event, configs)
+        this.handleEditedMessageMultiAll(event, configs),
       );
 
       this.logger.log(
-        `✅ Listening to source channel ${sourceId} (${configs.length} target configurations)`
+        `✅ Listening to source channel ${sourceId} (${configs.length} target configurations)`,
       );
     }
   }
 
   private startWatchingLegacy() {
     this.logger.log(
-      `Starting to watch channel ${this.sourceChannelId} for messages...`
+      `Starting to watch channel ${this.sourceChannelId} for messages...`,
     );
 
     this.telegramService.addNewMessageHandler(
       this.sourceChannelId,
-      this.handleNewMessage.bind(this)
+      this.handleNewMessage.bind(this),
     );
 
     this.telegramService.addEditedMessageHandler(
       this.sourceChannelId,
-      this.handleEditedMessage.bind(this)
+      this.handleEditedMessage.bind(this),
     );
   }
 
   private async handleNewMessageMultiAll(
     event: NewMessageEvent,
-    channelConfigs: ChannelConfig[]
+    channelConfigs: ChannelConfig[],
   ) {
     try {
       const message = event.message;
@@ -184,13 +184,13 @@ export class TranslatorService implements OnModuleInit {
 
       if (applicableConfigs.length === 0) {
         this.logger.debug(
-          `Message from topic ${messageTopicId} doesn't match any configured source topics, skipping`
+          `Message from topic ${messageTopicId} doesn't match any configured source topics, skipping`,
         );
         return;
       }
 
       this.logger.log(
-        `Processing message from topic ${messageTopicId}, matched ${applicableConfigs.length} configuration(s)`
+        `Processing message from topic ${messageTopicId}, matched ${applicableConfigs.length} configuration(s)`,
       );
 
       // Process message for each applicable channel config
@@ -222,13 +222,13 @@ export class TranslatorService implements OnModuleInit {
             await this.processGroupedMessages(
               groupKey,
               groupData.messages,
-              channelConfig
+              channelConfig,
             );
             this.groupedMessages.delete(groupKey);
           }, GROUPED_MESSAGE_TIMEOUT_MS);
 
           this.logger.log(
-            `Collected message ${groupData.messages.length} for group ${groupKey}`
+            `Collected message ${groupData.messages.length} for group ${groupKey}`,
           );
         } else {
           // Not part of a group - process immediately
@@ -238,7 +238,7 @@ export class TranslatorService implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         `Error processing message: ${error.message}`,
-        error.stack
+        error.stack,
       );
     }
   }
@@ -277,13 +277,13 @@ export class TranslatorService implements OnModuleInit {
           await this.processGroupedMessages(
             groupedId,
             groupData.messages,
-            legacyChannelConfig
+            legacyChannelConfig,
           );
           this.groupedMessages.delete(groupedId);
         }, GROUPED_MESSAGE_TIMEOUT_MS);
 
         this.logger.log(
-          `Collected message ${groupData.messages.length} for group ${groupedId}`
+          `Collected message ${groupData.messages.length} for group ${groupedId}`,
         );
         return;
       }
@@ -297,7 +297,7 @@ export class TranslatorService implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         `Error processing message: ${error.message}`,
-        error.stack
+        error.stack,
       );
     }
   }
@@ -305,11 +305,11 @@ export class TranslatorService implements OnModuleInit {
   private async processGroupedMessages(
     groupedId: string,
     messages: any[],
-    channelConfig: ChannelConfig
+    channelConfig: ChannelConfig,
   ) {
     try {
       this.logger.log(
-        `Processing grouped messages (${messages.length} items) for group ${groupedId}`
+        `Processing grouped messages (${messages.length} items) for group ${groupedId}`,
       );
 
       // Add grouped message to queue for rate-limited processing
@@ -322,14 +322,14 @@ export class TranslatorService implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         `Error processing grouped messages: ${error.message}`,
-        error.stack
+        error.stack,
       );
     }
   }
 
   private async processSingleMessage(
     message: any,
-    channelConfig: ChannelConfig
+    channelConfig: ChannelConfig,
   ) {
     try {
       const messageText = message.message;
@@ -342,14 +342,25 @@ export class TranslatorService implements OnModuleInit {
 
         if (!messageTextLower.includes(channelConfig.searchKeyword)) {
           this.logger.debug(
-            `Message doesn't contain keyword "${channelConfig.searchKeyword}", skipping`
+            `Message doesn't contain keyword "${channelConfig.searchKeyword}", skipping`,
           );
           return;
         }
 
         this.logger.log(
-          `✅ Keyword "${channelConfig.searchKeyword}" found in message!`
+          `✅ Keyword "${channelConfig.searchKeyword}" found in message!`,
         );
+      }
+
+      // Skip messages containing spam text
+      if (messageText) {
+        const messageTextLower = messageText.toLowerCase();
+        if (messageTextLower.includes("фулл в https://t.me/top1mirror")) {
+          this.logger.log(
+            `⛔ Skipping message containing spam text: "фулл в https://t.me/top1mirror"`,
+          );
+          return;
+        }
       }
 
       // Log message info
@@ -359,13 +370,13 @@ export class TranslatorService implements OnModuleInit {
             channelConfig.sourceId
           }. Text: ${
             messageText ? messageText.substring(0, 50) : "(no text)"
-          }...`
+          }...`,
         );
       } else if (messageText) {
         this.logger.log(
           `New message from channel ${
             channelConfig.sourceId
-          }: ${messageText.substring(0, 100)}...`
+          }: ${messageText.substring(0, 100)}...`,
         );
       } else {
         this.logger.log("Received message without text or media, skipping...");
@@ -381,14 +392,14 @@ export class TranslatorService implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         `Error processing single message: ${error.message}`,
-        error.stack
+        error.stack,
       );
     }
   }
 
   private async handleEditedMessageMultiAll(
     event: any,
-    channelConfigs: ChannelConfig[]
+    channelConfigs: ChannelConfig[],
   ) {
     try {
       const message = event.message;
@@ -396,7 +407,7 @@ export class TranslatorService implements OnModuleInit {
       const messageText = message.message;
 
       this.logger.log(
-        `Message ${sourceMessageId} was edited, processing ${channelConfigs.length} target configurations`
+        `Message ${sourceMessageId} was edited, processing ${channelConfigs.length} target configurations`,
       );
 
       // Get the source topic ID from the message
@@ -419,12 +430,12 @@ export class TranslatorService implements OnModuleInit {
         const targetMessageId = this.mappingService.getMapping(
           sourceMessageId,
           channelConfig.targetChannelId,
-          channelConfig.targetTopicId
+          channelConfig.targetTopicId,
         );
 
         if (!targetMessageId) {
           this.logger.debug(
-            `No mapping found for edited message ${sourceMessageId}, skipping`
+            `No mapping found for edited message ${sourceMessageId}, skipping`,
           );
           continue;
         }
@@ -433,7 +444,7 @@ export class TranslatorService implements OnModuleInit {
         const targetKey = `${channelConfig.targetChannelId}:${targetMessageId}`;
         if (editedTargets.has(targetKey)) {
           this.logger.debug(
-            `Already edited message ${targetMessageId}, skipping duplicate`
+            `Already edited message ${targetMessageId}, skipping duplicate`,
           );
           continue;
         }
@@ -449,23 +460,23 @@ export class TranslatorService implements OnModuleInit {
         await this.telegramService.editMessage(
           channelConfig.targetChannelId,
           targetMessageId,
-          processedText
+          processedText,
         );
 
         if (channelConfig.targetTopicId) {
           this.logger.log(
-            `✅ Message ${targetMessageId} edited in channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`
+            `✅ Message ${targetMessageId} edited in channel ${channelConfig.targetChannelId}, topic ${channelConfig.targetTopicId}`,
           );
         } else {
           this.logger.log(
-            `✅ Message ${targetMessageId} edited in channel ${channelConfig.targetChannelId}`
+            `✅ Message ${targetMessageId} edited in channel ${channelConfig.targetChannelId}`,
           );
         }
       }
     } catch (error) {
       this.logger.error(
         `Error handling edited message: ${error.message}`,
-        error.stack
+        error.stack,
       );
     }
   }
@@ -481,12 +492,12 @@ export class TranslatorService implements OnModuleInit {
       // Check if we have a mapping for this message
       const targetMessageId = this.mappingService.getMapping(
         sourceMessageId,
-        this.targetChannelId
+        this.targetChannelId,
       );
 
       if (!targetMessageId) {
         this.logger.warn(
-          `No mapping found for edited message ${sourceMessageId}, skipping edit`
+          `No mapping found for edited message ${sourceMessageId}, skipping edit`,
         );
         return;
       }
@@ -502,16 +513,16 @@ export class TranslatorService implements OnModuleInit {
       await this.telegramService.editMessage(
         this.targetChannelId,
         targetMessageId,
-        processedText
+        processedText,
       );
 
       this.logger.log(
-        `✅ Message ${targetMessageId} edited successfully in target channel`
+        `✅ Message ${targetMessageId} edited successfully in target channel`,
       );
     } catch (error) {
       this.logger.error(
         `Error handling edited message: ${error.message}`,
-        error.stack
+        error.stack,
       );
     }
   }
@@ -536,13 +547,13 @@ export class TranslatorService implements OnModuleInit {
       if (queuedMessage.type === "single") {
         await this.senderService.sendSingleMessage(
           queuedMessage.message!,
-          queuedMessage.channelConfig
+          queuedMessage.channelConfig,
         );
       } else {
         await this.senderService.sendGroupedMessage(
           queuedMessage.messages!,
           queuedMessage.channelConfig,
-          queuedMessage.groupedId!
+          queuedMessage.groupedId!,
         );
       }
     });
